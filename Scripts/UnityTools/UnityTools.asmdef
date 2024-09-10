@@ -1,0 +1,17 @@
+{
+    "name": "UnityTools",
+    "rootNamespace": "UnityTools",
+    "references": [
+        "GUID:75469ad4d38634e559750d17036d5f7c",
+        "GUID:28452d230e77a534c8d2642d60d7c6c2"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

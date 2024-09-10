@@ -1,0 +1,18 @@
+{
+    "name": "GraphicPrimitives.Editor",
+    "rootNamespace": "GraphicPrimitives.Editor",
+    "references": [
+        "GUID:81a1b122a92a49dfb6eb4bbf48ce7bcc"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
