@@ -1,4 +1,5 @@
-﻿using UnityEngine.InputSystem.EnhancedTouch;
+﻿#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem.EnhancedTouch;
 using UnityEngine.InputSystem.UI;
 
 namespace UnityTools
@@ -112,3 +113,4 @@ namespace UnityTools
         }
     }
 }
+#endif
