@@ -133,7 +133,7 @@ namespace Tools.Editor
             return dir;
         }
 
-        private static Vector2 DrawCompass(Rect rect, Vector2 dir, float angle, out float outAngle)
+        internal static Vector2 DrawCompass(Rect rect, Vector2 dir, float angle, out float outAngle)
         {
             outAngle = angle;
             var e = Event.current;
