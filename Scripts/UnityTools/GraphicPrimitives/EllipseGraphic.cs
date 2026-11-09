@@ -486,19 +486,26 @@ namespace UnityTools.GraphicPrimitives
 
                 if (!ShouldDrawEdge(i - 1, in info))
                 {
-                    DrawEdgeCap(vh, in prevVert, -1, stops, in info, in edgeColorData);
+                    DrawEdgeCap(vh, in prevVert, -1, stops, in info, in edgeColorData, shouldFill, !info.IsClosed && i == 0);
                 }
 
                 if (!ShouldDrawEdge(i + 1, in info))
                 {
-                    DrawEdgeCap(vh, in vert, 1, stops, in info, in edgeColorData);
+                    DrawEdgeCap(vh, in vert, 1, stops, in info, in edgeColorData, shouldFill, !info.IsClosed && i == info.HullSections - 1);
                 }
             }
 
             if (shouldFill && !info.IsClosed && info.IsAaEnabled)
             {
-                DrawFilledEdgeSide(vh, in filledVerts[0], -1, in info, in mainColorData, in edgeColorData);
-                DrawFilledEdgeSide(vh, in filledVerts[^1], 1, in info, in mainColorData, in edgeColorData);
+                if (_roundCaps || !ShouldDrawEdge(0, in info))
+                {
+                    DrawFilledEdgeSide(vh, in filledVerts[0], -1, in info, in mainColorData, in edgeColorData);
+                }
+
+                if (_roundCaps || !ShouldDrawEdge(info.HullSections - 1, in info))
+                {
+                    DrawFilledEdgeSide(vh, in filledVerts[^1], 1, in info, in mainColorData, in edgeColorData);
+                }
             }
         }
 
@@ -507,13 +514,36 @@ namespace UnityTools.GraphicPrimitives
             var angle = info.StartAngleRadians + index * info.AngleDeltaRadians;
             var direction = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
             var center = info.EnclosingRect.center;
+            var radius = Vector2.Scale(info.EllipseHalfSize, direction);
+            var aaRadius = Vector2.Scale(info.EllipseAaHalfSize, direction);
+            var edgeRadius = Vector2.Scale(info.EllipseEdgeHalfSize, direction);
+            var aaEdgeRadius = Vector2.Scale(info.EllipseEdgeAaHalfSize, direction);
+            if (!info.IsClosed)
+            {
+                // The same ellipse parameter on different layers does not lie on one ray.
+                aaRadius = GetRadiusOnRay(radius, info.EllipseAaHalfSize);
+                edgeRadius = GetRadiusOnRay(radius, info.EllipseEdgeHalfSize);
+                aaEdgeRadius = GetRadiusOnRay(radius, info.EllipseEdgeAaHalfSize);
+            }
+
             return new Vert
             {
-                Position = center + Vector2.Scale(info.EllipseHalfSize, direction),
-                AaPosition = center + Vector2.Scale(info.EllipseAaHalfSize, direction),
-                EdgePosition = center + Vector2.Scale(info.EllipseEdgeHalfSize, direction),
-                AaEdgePosition = center + Vector2.Scale(info.EllipseEdgeAaHalfSize, direction),
+                Position = center + radius,
+                AaPosition = center + aaRadius,
+                EdgePosition = center + edgeRadius,
+                AaEdgePosition = center + aaEdgeRadius,
             };
+        }
+
+        private static Vector2 GetRadiusOnRay(in Vector2 radius, in Vector2 halfSize)
+        {
+            if (halfSize.x <= 0 || halfSize.y <= 0)
+            {
+                return Vector2.zero;
+            }
+
+            var scaled = new Vector2(radius.x / halfSize.x, radius.y / halfSize.y);
+            return radius / scaled.magnitude;
         }
 
         private static bool ShouldDrawEdge(int index, in EllipseInfo info)
@@ -538,30 +568,38 @@ namespace UnityTools.GraphicPrimitives
             return (info.IsClosed ? (index + 1) % info.HullSections : index) % 2 == 0;
         }
 
-        private void DrawEdgeCap(VertexHelper vh, in Vert vert, int direction, ReadOnlySpan<float> stops, in EllipseInfo info, in ColorCalculationData colorData)
+        private void DrawEdgeCap(VertexHelper vh, in Vert vert, int direction, ReadOnlySpan<float> stops, in EllipseInfo info, in ColorCalculationData colorData, bool shouldFill, bool isSectorEnd)
         {
             var edge = vert.Position - vert.EdgePosition;
             var thickness = edge.magnitude;
-            var innerAa = Vector2.Distance(vert.EdgePosition, vert.AaEdgePosition);
-            var outerAa = Vector2.Distance(vert.Position, vert.AaPosition);
-            var hasAa = innerAa > 0 || outerAa > 0;
-            if (thickness <= 0 || (!_roundCaps && !hasAa))
+            if (!_roundCaps)
+            {
+                if (info.IsAaEnabled)
+                {
+                    DrawFlatEdgeCap(vh, in vert, direction, in info, shouldFill, isSectorEnd);
+                }
+
+                return;
+            }
+
+            if (thickness <= 0)
             {
                 return;
             }
+
+            var innerAa = Vector2.Distance(vert.EdgePosition, vert.AaEdgePosition);
+            var outerAa = Vector2.Distance(vert.Position, vert.AaPosition);
+            var hasAa = innerAa > 0 || outerAa > 0;
 
             // Sample the same semicircle as a round line cap, adding the gradient stops
             // to its diameter so the colors agree with the adjoining edge.
             Span<float> samples = stackalloc float[stops.Length + RoundCapSections - 1];
             stops.CopyTo(samples);
             var sampleCount = stops.Length;
-            if (_roundCaps)
+            for (int i = 1; i < RoundCapSections; i++)
             {
-                for (int i = 1; i < RoundCapSections; i++)
-                {
-                    var t = (1 - Mathf.Cos(i * Mathf.PI / RoundCapSections)) * 0.5f;
-                    AddGradientStop(samples, ref sampleCount, t);
-                }
+                var t = (1 - Mathf.Cos(i * Mathf.PI / RoundCapSections)) * 0.5f;
+                AddGradientStop(samples, ref sampleCount, t);
             }
 
             var across = edge / thickness;
@@ -573,7 +611,7 @@ namespace UnityTools.GraphicPrimitives
             {
                 var t = samples[i];
                 var seam = vert.EdgePosition + edge * t;
-                var rise = _roundCaps ? Mathf.Sqrt(t * (1 - t)) : 0;
+                var rise = Mathf.Sqrt(t * (1 - t));
                 var position = seam + along * (thickness * rise);
                 var seamColor = CalculateEdgeColor(in seam, t, in colorData);
                 var seamIndex = AddVert(vh, seam, seamColor, in info.EnclosingRect);
@@ -583,18 +621,14 @@ namespace UnityTools.GraphicPrimitives
                 var aaIndex = capIndex;
                 if (hasAa)
                 {
-                    var aaDirection = _roundCaps ? across * (2 * t - 1) + along * (2 * rise) : along;
+                    var aaDirection = across * (2 * t - 1) + along * (2 * rise);
                     var aaPosition = position + aaDirection * Mathf.LerpUnclamped(innerAa, outerAa, t);
                     aaIndex = AddVert(vh, aaPosition, seamColor.WithAlpha(0), in info.EnclosingRect);
                 }
 
                 if (i > 0)
                 {
-                    if (_roundCaps)
-                    {
-                        DrawCapStrip(vh, prevSeam, prevCap, seamIndex, capIndex, direction);
-                    }
-
+                    DrawCapStrip(vh, prevSeam, prevCap, seamIndex, capIndex, direction);
                     if (hasAa)
                     {
                         DrawCapStrip(vh, prevCap, prevAa, capIndex, aaIndex, direction);
@@ -605,20 +639,59 @@ namespace UnityTools.GraphicPrimitives
                 prevCap = capIndex;
                 prevAa = aaIndex;
             }
+        }
 
-            if (!_roundCaps && info.IsAaEnabled)
+        private static void DrawFlatEdgeCap(VertexHelper vh, in Vert vert, int direction, in EllipseInfo info, bool shouldFill, bool isSectorEnd)
+        {
+            var shouldDrawFillSide = shouldFill && isSectorEnd;
+            Span<int> side = stackalloc int[vert.Index - vert.EdgeIndex + 3];
+            var count = 0;
+            if (shouldDrawFillSide)
             {
-                var corner = AddVert(vh, vert.AaPosition + along * outerAa, CalculateEdgeColor(in vert.Position, 1, in colorData).WithAlpha(0), in info.EnclosingRect);
-                if (direction < 0)
+                side[count++] = 0;
+                side[count++] = vert.AaEdgeIndex;
+            }
+
+            for (int index = vert.EdgeIndex; index <= vert.Index; index++)
+            {
+                side[count++] = index;
+            }
+
+            var axis = isSectorEnd ? vert.Position - info.EnclosingRect.center : vert.Position - vert.EdgePosition;
+            var aaWidth = info.EllipseAaHalfSize.x - info.EllipseHalfSize.x;
+            var offset = Vector2.Perpendicular(axis.normalized) * (direction * aaWidth);
+            var firstAa = vh.currentVertCount;
+            for (int i = 0; i < count; i++)
+            {
+                var vertex = UIVertex.simpleVert;
+                vh.PopulateUIVertex(ref vertex, side[i]);
+                vertex.position += (Vector3)offset;
+                vertex.color.a = 0;
+                vh.AddVert(vertex);
+                if (i > 0)
                 {
-                    vh.AddTriangle(vert.Index, vert.AaIndex, corner);
-                    vh.AddTriangle(vert.Index, corner, prevAa);
+                    DrawCapStrip(vh, side[i - 1], firstAa + i - 1, side[i], firstAa + i, direction);
                 }
-                else
-                {
-                    vh.AddTriangle(vert.Index, corner, vert.AaIndex);
-                    vh.AddTriangle(vert.Index, prevAa, corner);
-                }
+            }
+
+            // Join both fringes at the same corner without extending a square past the cut.
+            if (!shouldFill)
+            {
+                AddCapCorner(vh, vert.EdgeIndex, firstAa, vert.AaEdgeIndex, direction);
+            }
+
+            AddCapCorner(vh, vert.Index, vert.AaIndex, firstAa + count - 1, direction);
+        }
+
+        private static void AddCapCorner(VertexHelper vh, int index, int first, int second, int direction)
+        {
+            if (direction < 0)
+            {
+                vh.AddTriangle(index, first, second);
+            }
+            else
+            {
+                vh.AddTriangle(index, second, first);
             }
         }
 
