@@ -1,7 +1,6 @@
 ﻿using UnityEditor;
+using UnityEngine;
 using UnityTools.GraphicPrimitives;
-using EdgeType = UnityTools.GraphicPrimitives.RoundedRectGraphic.EdgeType;
-using EdgeThicknessType = UnityTools.GraphicPrimitives.RoundedRectGraphic.EdgeThicknessType;
 
 namespace Tools.EditorOnly.GraphicPrimitives
 {
@@ -12,6 +11,7 @@ namespace Tools.EditorOnly.GraphicPrimitives
         
         private SerializedProperty _colorProp;
         private SerializedProperty _startAngleProp;
+        private SerializedProperty _sweepAngleProp;
         private SerializedProperty _hullSectionsProp;
         private SerializedProperty _materialProp;
         private SerializedProperty _spriteProp;
@@ -20,13 +20,14 @@ namespace Tools.EditorOnly.GraphicPrimitives
         private SerializedProperty _keepCircleProp;
         private SerializedProperty _maskableProp;
         private SerializedProperty _shouldUseGradientProp;
-        private SerializedProperty _colorGradientProp;
+        private SerializedProperty _gradientColorProp;
         private SerializedProperty _gradientTypeProp;
         private SerializedProperty _antiAliasingLayerWidthProp;
         private SerializedProperty _modeProp;
         private SerializedProperty _edgeThicknessProp;
         private SerializedProperty _edgeColorProp;
         private SerializedProperty _isDashedProp;
+        private SerializedProperty _roundCapsProp;
         private SerializedProperty _shouldUseGradientForEdgeProp;
         private SerializedProperty _edgeColorGradientProp;
         private SerializedProperty _edgeGradientTypeProp;
@@ -55,14 +56,16 @@ namespace Tools.EditorOnly.GraphicPrimitives
             _raycastPaddingProp = serializedObject.FindProperty("m_RaycastPadding");
             _maskableProp = serializedObject.FindProperty("m_Maskable");
             _startAngleProp = serializedObject.FindProperty("_startAngle");
+            _sweepAngleProp = serializedObject.FindProperty("_sweepAngle");
             _hullSectionsProp = serializedObject.FindProperty("_hullSections");
             _shouldUseGradientProp = serializedObject.FindProperty("_shouldUseGradient");
-            _colorGradientProp = serializedObject.FindProperty("_colorGradient");
+            _gradientColorProp = serializedObject.FindProperty("_gradientColor");
             _gradientTypeProp = serializedObject.FindProperty("_gradientType");
             _keepCircleProp = serializedObject.FindProperty("_keepCircle");
             _antiAliasingLayerWidthProp = serializedObject.FindProperty("_antiAliasingLayerWidth");
             _modeProp = serializedObject.FindProperty("_mode");
             _isDashedProp = serializedObject.FindProperty("_isDashed");
+            _roundCapsProp = serializedObject.FindProperty("_roundCaps");
             _edgeThicknessModeProp = serializedObject.FindProperty("_edgeThicknessMode");
             _edgeThicknessRelativeProp = serializedObject.FindProperty("_edgeThicknessRelative");
             _edgeThicknessProp = serializedObject.FindProperty("_edgeThickness");
@@ -100,7 +103,7 @@ namespace Tools.EditorOnly.GraphicPrimitives
             if (_shouldUseGradientProp.boolValue)
             {
                 EditorGUILayout.PropertyField(_gradientTypeProp);
-                EditorGUILayout.PropertyField(_colorGradientProp);
+                EditorGUILayout.PropertyField(_gradientColorProp);
             }
             else
             {
@@ -108,22 +111,31 @@ namespace Tools.EditorOnly.GraphicPrimitives
             }
             
             EditorGUILayout.PropertyField(_startAngleProp);
+            EditorGUILayout.PropertyField(_sweepAngleProp);
             
             EditorGUILayout.PropertyField(_hullSectionsProp);
             
             EditorGUILayout.PropertyField(_keepCircleProp);
-            EditorGUILayout.PropertyField(_isDashedProp);
             EditorGUILayout.PropertyField(_antiAliasingLayerWidthProp);
             
             EditorGUILayout.PropertyField(_modeProp);
-            if ((EdgeType)_modeProp.enumValueIndex != EdgeType.None)
+            if (_modeProp.hasMultipleDifferentValues || (EllipseGraphic.Mode)_modeProp.intValue != EllipseGraphic.Mode.Fill)
             {
+                EditorGUILayout.PropertyField(_isDashedProp);
+                if (_sweepAngleProp.hasMultipleDifferentValues || Mathf.Abs(_sweepAngleProp.floatValue) < 360f ||
+                    _isDashedProp.hasMultipleDifferentValues || _isDashedProp.boolValue)
+                {
+                    EditorGUILayout.PropertyField(_roundCapsProp);
+                }
+
                 EditorGUILayout.PropertyField(_edgeThicknessModeProp);
-                if ((EdgeThicknessType)_edgeThicknessModeProp.enumValueIndex == EdgeThicknessType.Absolute)
+                var thicknessMode = (EllipseGraphic.EdgeThicknessMode)_edgeThicknessModeProp.intValue;
+                if (_edgeThicknessModeProp.hasMultipleDifferentValues || thicknessMode == EllipseGraphic.EdgeThicknessMode.Absolute)
                 {
                     EditorGUILayout.PropertyField(_edgeThicknessProp);
                 }
-                else
+
+                if (_edgeThicknessModeProp.hasMultipleDifferentValues || thicknessMode == EllipseGraphic.EdgeThicknessMode.Relative)
                 {
                     EditorGUILayout.PropertyField(_edgeThicknessRelativeProp);
                 }
