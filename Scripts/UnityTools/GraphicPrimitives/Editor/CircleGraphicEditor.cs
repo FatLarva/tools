@@ -8,6 +8,12 @@ namespace Tools.EditorOnly.GraphicPrimitives
     public class CircleGraphicEditor : Editor
     {
         private const string IsBuiltInShownSessionVariableKey = nameof(CircleGraphicEditor) + "IsBuiltInShown";
+        private static readonly GUIContent DashAngleLabel = new("Dash Angle (°)",
+            "Visible angular length of each dash. Independent of Hull Sections.");
+        private static readonly GUIContent GapAngleLabel = new("Gap Angle (°)",
+            "Visible angular gap between dashes. Round-cap extensions are compensated; antialiasing feather is excluded.");
+        private static readonly GUIContent DashCountLabel = new("Dash Count",
+            "Number of evenly spaced dashes across Sweep Angle. Independent of Hull Sections.");
         
         private SerializedProperty _colorProp;
         private SerializedProperty _startAngleProp;
@@ -27,6 +33,10 @@ namespace Tools.EditorOnly.GraphicPrimitives
         private SerializedProperty _edgeThicknessProp;
         private SerializedProperty _edgeColorProp;
         private SerializedProperty _isDashedProp;
+        private SerializedProperty _dashModeProp;
+        private SerializedProperty _dashAngleProp;
+        private SerializedProperty _gapAngleProp;
+        private SerializedProperty _dashCountProp;
         private SerializedProperty _roundCapsProp;
         private SerializedProperty _shouldUseGradientForEdgeProp;
         private SerializedProperty _edgeColorGradientProp;
@@ -65,6 +75,10 @@ namespace Tools.EditorOnly.GraphicPrimitives
             _antiAliasingLayerWidthProp = serializedObject.FindProperty("_antiAliasingLayerWidth");
             _modeProp = serializedObject.FindProperty("_mode");
             _isDashedProp = serializedObject.FindProperty("_isDashed");
+            _dashModeProp = serializedObject.FindProperty("_dashMode");
+            _dashAngleProp = serializedObject.FindProperty("_dashAngle");
+            _gapAngleProp = serializedObject.FindProperty("_gapAngle");
+            _dashCountProp = serializedObject.FindProperty("_dashCount");
             _roundCapsProp = serializedObject.FindProperty("_roundCaps");
             _edgeThicknessModeProp = serializedObject.FindProperty("_edgeThicknessMode");
             _edgeThicknessRelativeProp = serializedObject.FindProperty("_edgeThicknessRelative");
@@ -122,6 +136,24 @@ namespace Tools.EditorOnly.GraphicPrimitives
             if (_modeProp.hasMultipleDifferentValues || (EllipseGraphic.Mode)_modeProp.intValue != EllipseGraphic.Mode.Fill)
             {
                 EditorGUILayout.PropertyField(_isDashedProp);
+                if (_isDashedProp.hasMultipleDifferentValues || _isDashedProp.boolValue)
+                {
+                    using (new EditorGUI.IndentLevelScope())
+                    {
+                        EditorGUILayout.PropertyField(_dashModeProp);
+                        if (_dashModeProp.hasMultipleDifferentValues ||
+                            (EllipseGraphic.DashMode)_dashModeProp.intValue == EllipseGraphic.DashMode.Angles)
+                        {
+                            EditorGUILayout.PropertyField(_dashAngleProp, DashAngleLabel);
+                        }
+                        if (_dashModeProp.hasMultipleDifferentValues ||
+                            (EllipseGraphic.DashMode)_dashModeProp.intValue == EllipseGraphic.DashMode.Count)
+                        {
+                            EditorGUILayout.PropertyField(_dashCountProp, DashCountLabel);
+                        }
+                        EditorGUILayout.PropertyField(_gapAngleProp, GapAngleLabel);
+                    }
+                }
                 if (_sweepAngleProp.hasMultipleDifferentValues || Mathf.Abs(_sweepAngleProp.floatValue) < 360f ||
                     _isDashedProp.hasMultipleDifferentValues || _isDashedProp.boolValue)
                 {
@@ -161,14 +193,6 @@ namespace Tools.EditorOnly.GraphicPrimitives
                 EditorGUILayout.PropertyField(_stencilRefProp);
             }
             
-            /*EditorGUILayout.PropertyField(_isDashedProp);
-            if (_isDashedProp.boolValue)
-            {
-                EditorGUILayout.PropertyField(_dashLengthPixelsProp);
-                EditorGUILayout.PropertyField(_dashGapLengthPixelsProp);
-                EditorGUILayout.PropertyField(_dashShiftProp);
-            }*/
-
             using (new EditorGUI.DisabledScope(true))
             {
                 EditorGUILayout.PropertyField(_vertCountProp);

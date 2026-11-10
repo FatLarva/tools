@@ -102,6 +102,12 @@ namespace UnityTools.GraphicPrimitives
             Relative,
         };
 
+        public enum DashMode
+        {
+            Angles,
+            Count,
+        }
+
         [FormerlySerializedAs("startAngle")]
         [SerializeField, Range(0.0f, 360.0f)]
         private int _startAngle = 0;
@@ -140,6 +146,24 @@ namespace UnityTools.GraphicPrimitives
         [SerializeField]
         [Tooltip("Edge mode only")]
         private bool _isDashed = false;
+
+        [SerializeField]
+        private DashMode _dashMode = DashMode.Count;
+
+        [SerializeField, Min(0)]
+        [Tooltip("Visible dash length in degrees, independent of Hull Sections. Used by Angles mode.")]
+        private float _dashAngle = 9;
+
+        [SerializeField, Min(0)]
+        [Tooltip("Visible angular gap between cap edges in degrees, excluding the transparent AA fringe.")]
+        private float _gapAngle = 9;
+
+        [SerializeField, Min(1)]
+        [Tooltip("Number of equally spaced dashes across the entire Sweep Angle. Used by Count mode.")]
+        private int _dashCount = 20;
+
+        [SerializeField, HideInInspector]
+        private int _dashSettingsVersion;
 
         [SerializeField]
         [Tooltip("Round the ends of an open edge or each dash.")]
@@ -235,14 +259,89 @@ namespace UnityTools.GraphicPrimitives
             
             ApplyStencil();
         }
+
+        protected override void OnEnable()
+        {
+            InitializeDashSettings();
+            base.OnEnable();
+        }
         
 #if UNITY_EDITOR
         protected override void OnValidate()
         {
+            InitializeDashSettings();
+            _dashAngle = ClampAngle(_dashAngle);
+            _gapAngle = ClampAngle(_gapAngle);
+            _dashCount = Mathf.Max(1, _dashCount);
             base.OnValidate();
             ApplyStencil();
         }
 #endif
+        public bool IsDashed
+        {
+            get => _isDashed;
+            set
+            {
+                InitializeDashSettings();
+                if (_isDashed == value) return;
+                _isDashed = value;
+                SetVerticesDirty();
+            }
+        }
+
+        public DashMode DashesMode => _dashMode;
+        public float DashAngle => _dashAngle;
+        public float GapAngle => _gapAngle;
+        public int DashCount => _dashCount;
+
+        public void SetDashesByCount(int count, float gapAngle)
+        {
+            count = Mathf.Max(1, count);
+            gapAngle = ClampAngle(gapAngle);
+            _dashSettingsVersion = 1;
+            if (_isDashed && _dashMode == DashMode.Count && _dashCount == count && _gapAngle == gapAngle) return;
+            _isDashed = true;
+            _dashMode = DashMode.Count;
+            _dashCount = count;
+            _gapAngle = gapAngle;
+            SetVerticesDirty();
+        }
+
+        public void SetDashesByAngle(float dashAngle, float gapAngle)
+        {
+            dashAngle = ClampAngle(dashAngle);
+            gapAngle = ClampAngle(gapAngle);
+            _dashSettingsVersion = 1;
+            if (_isDashed && _dashMode == DashMode.Angles && _dashAngle == dashAngle && _gapAngle == gapAngle) return;
+            _isDashed = true;
+            _dashMode = DashMode.Angles;
+            _dashAngle = dashAngle;
+            _gapAngle = gapAngle;
+            SetVerticesDirty();
+        }
+
+        private void InitializeDashSettings()
+        {
+            if (_dashSettingsVersion != 0) return;
+            if (_isDashed)
+            {
+                // Old assets alternated mesh sections. Preserve their approximate density once,
+                // then changing mesh quality no longer changes the pattern.
+                var sweep = Mathf.Abs(ClampSweep(_sweepAngle));
+                var sections = Mathf.Max(1, Mathf.CeilToInt(Mathf.Max(3, _hullSections) * sweep / 360));
+                _dashMode = DashMode.Count;
+                _dashCount = Mathf.Max(1, Mathf.RoundToInt(sections * 0.5f));
+                _dashAngle = _gapAngle = sweep / sections;
+            }
+            _dashSettingsVersion = 1;
+        }
+
+        private static float ClampAngle(float value) =>
+            float.IsNaN(value) || float.IsInfinity(value) ? 0 : Mathf.Clamp(value, 0, 360);
+
+        private static float ClampSweep(float value) =>
+            float.IsNaN(value) || float.IsInfinity(value) ? 0 : Mathf.Clamp(value, -360, 360);
+
         public Color EdgeColor
         {
             get => _edgeColor;
@@ -268,7 +367,7 @@ namespace UnityTools.GraphicPrimitives
             get => _sweepAngle;
             set
             {
-                var sweepAngle = Mathf.Clamp(value, -360, 360);
+                var sweepAngle = ClampSweep(value);
                 if (_sweepAngle == sweepAngle)
                 {
                     return;
@@ -289,6 +388,7 @@ namespace UnityTools.GraphicPrimitives
         
         protected override void OnPopulateMesh(VertexHelper vh)
         {
+            InitializeDashSettings();
             _vertCount = 0;
             _trianglesCount = 0;
             vh.Clear();
@@ -296,7 +396,7 @@ namespace UnityTools.GraphicPrimitives
             Rect enclosingRect = GetPixelAdjustedRect();
             
             var smallerSide = Math.Min(enclosingRect.width, enclosingRect.height);
-            var sweepAngle = Mathf.Clamp(_sweepAngle, -360, 360);
+            var sweepAngle = ClampSweep(_sweepAngle);
             if (smallerSide <= 0 || sweepAngle == 0)
             {
                 return;
@@ -389,7 +489,6 @@ namespace UnityTools.GraphicPrimitives
 
         private void GenerateEdge(VertexHelper vh, in EllipseInfo info, bool shouldFill)
         {
-            var center = info.EnclosingRect.center;
             var mainColorData = new ColorCalculationData(info.EnclosingRect, color, _gradientColor, _gradientType, _shouldUseGradient);
             var edgeColorData = new ColorCalculationData(info.EnclosingRect, _edgeColor, _edgeColorGradient, _edgeGradientType, _shouldUseGradientForEdge);
 
@@ -420,6 +519,23 @@ namespace UnityTools.GraphicPrimitives
             {
                 radialColors[i] = _edgeColorGradient.Evaluate(stops[i]);
             }
+
+            if (info.IsDashed)
+            {
+                GenerateDashedEdge(vh, in info, shouldFill, stops, radialColors, in mainColorData, in edgeColorData);
+                return;
+            }
+
+            GenerateEdgeSpan(vh, in info, shouldFill, stops, radialColors, in mainColorData, in edgeColorData);
+        }
+
+        private void GenerateEdgeSpan(VertexHelper vh, in EllipseInfo info, bool shouldFill,
+            ReadOnlySpan<float> stops, ReadOnlySpan<Color32> radialColors,
+            in ColorCalculationData mainColorData, in ColorCalculationData edgeColorData, bool drawEdge = true)
+        {
+            var center = info.EnclosingRect.center;
+            var stopCount = stops.Length;
+            var isRadial = radialColors.Length > 0;
 
             if (shouldFill)
             {
@@ -458,7 +574,7 @@ namespace UnityTools.GraphicPrimitives
             {
                 var prevVert = filledVerts[i];
                 var vert = filledVerts[(i + 1) % filledVerts.Length];
-                var shouldDrawEdge = ShouldDrawEdge(i, in info);
+                var shouldDrawEdge = drawEdge && ShouldDrawEdge(i, in info);
                 if (shouldFill)
                 {
                     vh.AddTriangle(0, vert.AaEdgeIndex, prevVert.AaEdgeIndex);
@@ -497,16 +613,121 @@ namespace UnityTools.GraphicPrimitives
 
             if (shouldFill && !info.IsClosed && info.IsAaEnabled)
             {
-                if (_roundCaps || !ShouldDrawEdge(0, in info))
+                if (_roundCaps || !drawEdge || !ShouldDrawEdge(0, in info))
                 {
                     DrawFilledEdgeSide(vh, in filledVerts[0], -1, in info, in mainColorData, in edgeColorData);
                 }
 
-                if (_roundCaps || !ShouldDrawEdge(info.HullSections - 1, in info))
+                if (_roundCaps || !drawEdge || !ShouldDrawEdge(info.HullSections - 1, in info))
                 {
                     DrawFilledEdgeSide(vh, in filledVerts[^1], 1, in info, in mainColorData, in edgeColorData);
                 }
             }
+        }
+
+        private void GenerateDashedEdge(VertexHelper vh, in EllipseInfo info, bool shouldFill,
+            ReadOnlySpan<float> stops, ReadOnlySpan<Color32> radialColors,
+            in ColorCalculationData mainColorData, in ColorCalculationData edgeColorData)
+        {
+            var sweep = Mathf.Abs(ClampSweep(_sweepAngle));
+            var gap = ClampAngle(_gapAngle);
+            var count = Mathf.Max(1, _dashCount);
+            var period = _dashMode == DashMode.Count ? sweep / count : ClampAngle(_dashAngle) + gap;
+            var empty = period <= 0.0001f || gap >= period;
+
+            // Adjacent dashes without a gap are one continuous edge, with no overlapping
+            // caps or duplicated seam. This also handles a single completed ring.
+            if (!empty && gap == 0 && info.IsClosed)
+            {
+                GenerateEdgeSpan(vh, in info, shouldFill, stops, radialColors, in mainColorData, in edgeColorData);
+                return;
+            }
+
+            // Fill and its inner transition remain continuous under the dashed border.
+            if (shouldFill)
+            {
+                GenerateEdgeSpan(vh, in info, true, stops, radialColors, in mainColorData, in edgeColorData, false);
+            }
+            if (empty) return;
+
+            if (gap == 0)
+            {
+                // On a partial sector the merged edge still respects its visible endpoints.
+                count = 1;
+                period = sweep;
+            }
+            else if (_dashMode == DashMode.Angles) count = Mathf.CeilToInt(sweep / period);
+            var edgeWidth = info.EllipseHalfSize.x - info.EllipseEdgeHalfSize.x;
+            var outerAa = info.EllipseAaHalfSize.x - info.EllipseHalfSize.x;
+            var innerAa = info.EllipseEdgeHalfSize.x - info.EllipseEdgeAaHalfSize.x;
+            var circleCapInset = _roundCaps && info.EllipseHalfSize.x == info.EllipseHalfSize.y
+                ? Mathf.Asin(Mathf.Clamp01(edgeWidth / (2 * info.EllipseHalfSize.x - edgeWidth)))
+                : -1;
+            var clockwise = _sweepAngle < 0;
+            for (int i = 0; i < count; i++)
+            {
+                var from = i * period + gap * 0.5f;
+                var to = Mathf.Min((i + 1) * period - gap * 0.5f, sweep - gap * 0.5f);
+                if (to <= from) continue;
+
+                // Tessellate each visible interval in the same CCW winding. Pattern order
+                // still follows Sweep Angle, including clockwise partial arcs.
+                var first = (_startAngle + (clockwise ? -to : from)) * Mathf.Deg2Rad;
+                var last = (_startAngle + (clockwise ? -from : to)) * Mathf.Deg2Rad;
+                if (_roundCaps)
+                {
+                    if (circleCapInset >= 0)
+                    {
+                        first += circleCapInset;
+                        last -= circleCapInset;
+                    }
+                    else
+                    {
+                        var visibleFirst = first;
+                        first = MoveCapInside(first, last, 1, in info);
+                        last = MoveCapInside(last, visibleFirst, -1, in info);
+                    }
+                }
+                if (last - first <= 0.000001f) continue;
+
+                var span = new EllipseInfo(info.EnclosingRect, Mathf.Max(3, _hullSections),
+                    first * Mathf.Rad2Deg, (last - first) * Mathf.Rad2Deg, false, outerAa, edgeWidth, innerAa);
+                GenerateEdgeSpan(vh, in span, false, stops, radialColors, in mainColorData, in edgeColorData);
+            }
+        }
+
+        private static float MoveCapInside(float boundary, float otherBoundary, int direction, in EllipseInfo info)
+        {
+            var low = 0f;
+            var high = Mathf.Abs(otherBoundary - boundary);
+            // The cap radius changes around an ellipse. Solve at the actual endpoint,
+            // rather than using an average radius or coupling the gap to mesh sections.
+            for (int i = 0; i < 22; i++)
+            {
+                var distance = (low + high) * 0.5f;
+                var seam = boundary + distance * direction;
+                var capBoundary = GetCapBoundary(seam, -direction, in info);
+                if ((capBoundary - boundary) * direction < 0) low = distance;
+                else high = distance;
+            }
+            return boundary + high * direction;
+        }
+
+        private static float GetCapBoundary(float angle, int direction, in EllipseInfo info)
+        {
+            var ray = Vector2.Scale(info.EllipseHalfSize, new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)));
+            var inner = GetRadiusOnRay(ray, info.EllipseEdgeHalfSize);
+            var center = (ray + inner) * 0.5f;
+            var radius = Vector2.Distance(ray, inner) * 0.5f;
+            var distance = center.magnitude;
+            if (distance <= 0) return angle;
+
+            // Tangent from the ellipse center to the semicircular cap. Convert the
+            // resulting polar ray back to ellipse-parameter degrees used by Start/Sweep.
+            var polar = Mathf.Atan2(center.y, center.x) + direction * Mathf.Asin(Mathf.Clamp01(radius / distance));
+            var parameter = Mathf.Atan2(info.EllipseHalfSize.x * Mathf.Sin(polar),
+                info.EllipseHalfSize.y * Mathf.Cos(polar));
+            return angle + Mathf.DeltaAngle(angle * Mathf.Rad2Deg, parameter * Mathf.Rad2Deg) * Mathf.Deg2Rad;
         }
 
         private static Vert CreateHullVert(int index, in EllipseInfo info)
@@ -553,19 +774,7 @@ namespace UnityTools.GraphicPrimitives
                 return false;
             }
 
-            if (!info.IsDashed)
-            {
-                return true;
-            }
-
-            index = (index + info.HullSections) % info.HullSections;
-            if (info.IsClockwise)
-            {
-                index = info.HullSections - 1 - index;
-            }
-
-            // Match the original alternating pattern at the seam of a closed ellipse.
-            return (info.IsClosed ? (index + 1) % info.HullSections : index) % 2 == 0;
+            return true;
         }
 
         private void DrawEdgeCap(VertexHelper vh, in Vert vert, int direction, ReadOnlySpan<float> stops, in EllipseInfo info, in ColorCalculationData colorData, bool shouldFill, bool isSectorEnd)
