@@ -1,77 +1,84 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
-using Logging;
-using StateMachine.Tools.StateMachine;
 
 namespace StateMachine
 {
-	public class StateMachineAsync : IAsyncDisposable
-	{
-		private readonly Dictionary<int, StateBaseAsync> _statesById;
+    /// <summary>Runs states sequentially on the application's synchronization context.</summary>
+    public sealed class StateMachineAsync<TId> : IStateTransitionSink<TId> where TId : struct
+    {
+        private readonly TransitionGatekeeper<TId> _transitionGatekeeper;
+        private StateBaseAsync<TId> _currentState;
 
-		private StateBaseAsync _currentState;
+        public StateBaseAsync<TId> CurrentState => _currentState;
 
-		public StateBaseAsync CurrentState => _currentState;
+        public event Action<TId> StateEntered;
 
-		public StateMachineAsync(StateBaseAsync[] states)
-		{
-			_statesById = new Dictionary<int, StateBaseAsync>();
-			foreach (var state in states)
-			{
-				_statesById.Add(state.StateId, state);
-				state.StateChangeRequestedAsync += OnStateChangeRequestedAsync;
-			}
-		}
-		
-		public async ValueTask DisposeAsync()
-		{
-			foreach (var state in _statesById.Values)
-			{
-				state.StateChangeRequestedAsync -= OnStateChangeRequestedAsync;
-			}
-			
-			if (_currentState != null)
-			{
-				await _currentState.ExitAsync();
-				_currentState = null;
-			}
-		}
+        public StateMachineAsync(IEnumerable<StateBaseAsync<TId>> states, IStateTransitionResolver<TId> transitions)
+        {
+            if (states == null)
+            {
+                throw new ArgumentNullException(nameof(states));
+            }
 
-		public async ValueTask InitAsync(int initialStateId, IStatePayload initialStatePayload = null)
-		{
-			await SelectStateAsync(initialStateId, initialStatePayload);
-		}
+            var stateLookup = new Dictionary<TId, StateBaseAsync<TId>>();
+            foreach (var state in states)
+            {
+                if (state == null || !stateLookup.TryAdd(state.StateId, state))
+                {
+                    throw new ArgumentException("States must be non-null and have unique IDs.", nameof(states));
+                }
+            }
 
-		public async ValueTask SelectStateAsync(int stateId, IStatePayload payload = null)
-		{
-			if (!_statesById.TryGetValue(stateId, out StateBaseAsync chosenState))
-			{
-				throw new ArgumentException($"Invalid state id: {stateId}");
-			}
+            _transitionGatekeeper = new TransitionGatekeeper<TId>(
+                stateLookup,
+                transitions ?? throw new ArgumentNullException(nameof(transitions)));
+        }
 
-			if (_currentState != null)
-			{
-				await _currentState.ExitAsync();
-				_currentState = null;
-			}
+        /// <summary>Completes after stopping and cleanup; lifecycle failures propagate to the caller.</summary>
+        public async Task RunAsync(TId initialState, IStatePayload payload, CancellationToken cancellation)
+        {
+            var state = _transitionGatekeeper.GetState(initialState, payload);
+            await using var registration = cancellation.Register(_transitionGatekeeper.Cancel);
 
-			_currentState = chosenState;
-			await chosenState.EnterAsync(payload);
-		}
+            while (true)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                using var stateLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                _transitionGatekeeper.Begin(state, cancellation);
+                _currentState = state;
 
-		protected virtual async ValueTask OnStateChangeRequestedAsync(StateTransferInfo info)
-		{
-			Log.Default.Info($"GameState change from {info.FromState} to {info.ToState} requested.");
+                try
+                {
+                    await state.EnterAsync(payload, stateLifetime.Token, _transitionGatekeeper);
+                    cancellation.ThrowIfCancellationRequested();
+                    StateEntered?.Invoke(state.StateId);
+                    var next = await _transitionGatekeeper.WaitAsync();
+                    state = next.State;
+                    payload = next.Payload;
+                }
+                finally
+                {
+                    var previous = _currentState;
+                    _transitionGatekeeper.End();
+                    _currentState = null;
+                    try
+                    {
+                        stateLifetime.Cancel();
+                    }
+                    finally
+                    {
+                        await previous.ExitAsync();
+                    }
+                }
+            }
+        }
 
-			if (_currentState != null && _currentState.StateId == info.ToState)
-			{
-				Log.Default.Error($"GameState trying to change to itself stateId: {info.ToState}.");
-
-				return;
-			}
-
-			await SelectStateAsync(info.ToState, info.Payload);
-		}
-	}
+        /// <summary>Requests a transition from the active state, using that state's output contract.</summary>
+        public void RequestTransition(TId destination, IStateOutput output)
+        {
+            _transitionGatekeeper.RequestTransition(destination, output);
+        }
+    }
 }

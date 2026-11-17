@@ -1,4 +1,4 @@
-﻿namespace StateMachine.Tools.StateMachine
+namespace StateMachine
 {
     public interface IStatePayload
     {
