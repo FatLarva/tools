@@ -1,5 +1,7 @@
 # Structured Process Examples
 
+For a larger graph, run **Tools > Structured Process > Run 20-step match example** and open `MatchPreparation/PrepareMatchProcess.cs`. Its README includes the full dependency graph and thread assignments. The run validates all data and explicit dependencies against a recorded execution trace.
+
 Import this sample from the Tools package and select **Tools > Structured Process > Run example** or **Run parallel example**. The Tools package includes the generator DLL; Source Gen Builder is not required to run either example.
 
 `PrepareProfilesProcess` declares two occurrences of `LoadProfileStep`. Their IDs and input/output aliases distinguish player and opponent data while sharing the source, logger and fallback profile. `PublishProfilesStep` appears first in the array but runs after both producers because of its data dependencies. `ReportProfilesStep` is optional and explicitly ordered after publishing. Main-thread execution is the default.
