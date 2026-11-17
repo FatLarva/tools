@@ -20,10 +20,10 @@ namespace Tools
 
 		public bool TryFlip(bool newValue)
 		{
-			var oldIntValue = _internalState;
 			var newIntValue = newValue ? 1 : 0;
+			var expectedIntValue = 1 - newIntValue;
 
-			return Interlocked.CompareExchange(ref _internalState, newIntValue, oldIntValue) != newIntValue;
+			return Interlocked.CompareExchange(ref _internalState, newIntValue, expectedIntValue) == expectedIntValue;
 		}
 
 		public override string ToString()
@@ -31,6 +31,9 @@ namespace Tools
 			return _internalState.ToString();
 		}
 
-		public static implicit operator bool(AtomicBool atomicBool) => atomicBool.Value;
+		public static implicit operator bool(AtomicBool atomicBool)
+		{
+			return atomicBool.Value;
+		}
 	}
 }
