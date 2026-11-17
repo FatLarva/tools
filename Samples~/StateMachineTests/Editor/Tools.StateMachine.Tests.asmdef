@@ -1,0 +1,22 @@
+{
+    "name": "Tools.StateMachine.Tests",
+    "rootNamespace": "Tools.Samples.StateMachineTests",
+    "references": [
+        "GUID:975987b380d442f1b19d65c3b8260a40",
+        "GUID:28452d230e77a534c8d2642d60d7c6c2"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

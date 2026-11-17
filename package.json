@@ -4,5 +4,17 @@
 	"description": "A set of useful tools for Unity",
 	"version": "1.1.0",
 	"unity": "2019.4",
-	"license": "MIT"
+	"license": "MIT",
+	"samples": [
+		{
+			"displayName": "State Machine Examples",
+			"description": "Runnable synchronous and asynchronous state machine examples, with typed contracts and state-owned cleanup.",
+			"path": "Samples~/StateMachineExamples"
+		},
+		{
+			"displayName": "State Machine Tests",
+			"description": "Edit Mode tests for Unity Test Framework. Install com.unity.test-framework before importing.",
+			"path": "Samples~/StateMachineTests"
+		}
+	]
   }
