@@ -31,6 +31,28 @@ namespace Tools.Samples.StructuredProcess
             }
         }
 
+        [MenuItem("Tools/Structured Process/Run parallel example")]
+        public static async void RunParallel()
+        {
+            var services = new ExampleServices();
+            var process = new PrepareProfilesParallelProcess(new PrepareProfilesParallelProcess.Input
+            {
+                Source = services,
+                View = services,
+                Analytics = services,
+                Log = Log.Default,
+                PlayerId = "player",
+                OpponentId = "offline-opponent",
+                Fallback = new PlayerProfile("Guest")
+            });
+
+            var result = await process.ExecuteAsync();
+            if (result.IsSuccess)
+            {
+                Debug.Log($"Parallel typed process output: {result.Output.Profiles.Player.DisplayName} / {result.Output.Profiles.Opponent.DisplayName}");
+            }
+        }
+
         private sealed class ExampleServices : IProfileSource, IProfileView, IProfileAnalytics
         {
             public async ValueTask<PlayerProfile> LoadAsync(string accountId, CancellationToken cancellationToken)

@@ -37,7 +37,9 @@ namespace Tools.StructuredProcess.Generator
         {
             var declaration = (ClassDeclarationSyntax)context.Node;
             var type = context.SemanticModel.GetDeclaredSymbol(declaration, cancellationToken) as INamedTypeSymbol;
-            if (type == null || type.BaseType?.ToDisplayString() != Names.Runtime + "LinearProcess")
+            string? baseType = type?.BaseType?.ToDisplayString();
+            if (type == null || (baseType != Names.Runtime + "LinearProcess"
+                && baseType != Names.Runtime + "ParallelProcess"))
             {
                 return null;
             }
@@ -46,6 +48,7 @@ namespace Tools.StructuredProcess.Generator
             {
                 var parser = new DeclarationParser(context.SemanticModel.Compilation, cancellationToken);
                 var model = parser.Parse(type, declaration);
+                model.Parallel = baseType == Names.Runtime + "ParallelProcess";
                 ProcessGraph.Bind(model, cancellationToken);
                 return new GenerationResult
                 {

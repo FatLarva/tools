@@ -15,5 +15,7 @@
   <ItemGroup>
     <Compile Include="../../Declarative/*.cs" Link="Runtime/%(Filename)%(Extension)" />
     <Compile Include="../../../Log/ILog.cs" Link="Runtime/ILog.cs" />
+    <Compile Include="../../../../Samples~/StructuredProcessTests/Editor/Parallel*.cs" Link="SharedTests/%(Filename)%(Extension)" />
+    <Analyzer Include="../Generator/bin/$(Configuration)/netstandard2.0/Tools.StructuredProcess.Generator.dll" />
   </ItemGroup>
 </Project>

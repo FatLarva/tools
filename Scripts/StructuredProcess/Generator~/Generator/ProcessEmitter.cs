@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace Tools.StructuredProcess.Generator
 {
-    internal sealed class ProcessEmitter
+    internal sealed partial class ProcessEmitter
     {
         private const string Runtime = "global::" + Names.Runtime;
         private readonly StringBuilder _source = new StringBuilder();
@@ -48,6 +48,24 @@ namespace Tools.StructuredProcess.Generator
             Close();
             Line();
 
+            if (process.Parallel && process.Order.Count != 0)
+            {
+                WriteParallelExecution(process);
+            }
+            else
+            {
+                WriteLinearExecution(process);
+            }
+
+            Close();
+            if (hasNamespace)
+            {
+                Close();
+            }
+        }
+
+        private void WriteLinearExecution(ProcessModel process)
+        {
             string result = Runtime + "StepResult<Output>";
             string signature = "public " + (process.Order.Count == 0 ? "" : "async ")
                 + "global::System.Threading.Tasks.ValueTask<" + result
@@ -73,11 +91,6 @@ namespace Tools.StructuredProcess.Generator
             _indent--;
             Line(process.Order.Count == 0 ? "}));" : "});");
             Close();
-            Close();
-            if (hasNamespace)
-            {
-                Close();
-            }
         }
 
         private void WriteStep(StepModel step, ProcessModel process)

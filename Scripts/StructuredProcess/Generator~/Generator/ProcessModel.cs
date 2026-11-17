@@ -18,6 +18,7 @@ namespace Tools.StructuredProcess.Generator
     {
         internal INamedTypeSymbol Type = null!;
         internal Location Location = null!;
+        internal bool Parallel;
         internal readonly List<StepModel> Steps = new List<StepModel>();
         internal readonly List<MemberModel> Outputs = new List<MemberModel>();
         internal readonly List<ExternalInput> Inputs = new List<ExternalInput>();

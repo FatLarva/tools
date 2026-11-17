@@ -1,6 +1,6 @@
 # Declarative structured processes
 
-`Tools.StructuredProcess.Declarative` provides a source-generated linear process alongside the existing `Simple.AsyncLinearProcess`. The existing implementation and its API are unchanged.
+`Tools.StructuredProcess.Declarative` provides source-generated linear and parallel processes alongside the existing `Simple.AsyncLinearProcess`. The existing implementation and its API are unchanged.
 
 The runtime is a separate assembly inside the Tools package. Source Gen Builder is optional: the package includes a prebuilt analyzer, and its source can also be built with the .NET SDK.
 
@@ -42,7 +42,17 @@ The generator supplies the process's nested `Input`, constructor `(Input input, 
 
 `StepResult<Output>.Failure("Reason")` represents expected failure. Exceptions from step construction/execution are captured as failures, preserving the original exception. Reading `Output` from a failed result throws. A default-initialized result is a failure.
 
-Call the process on the main thread. The linear executor constructs and awaits each step there, preserving the caller's synchronization context. Steps must honor their thread contract internally. `Thread = StepThread.Any` permits background execution; this first, linear executor still runs it on the calling thread. A parallel executor is not included yet.
+Call the process on the main thread. The linear executor constructs and awaits each step there, preserving the caller's synchronization context. Steps must honor their thread contract internally. `Thread = StepThread.Any` permits background execution; the linear executor still runs it on the calling thread.
+
+## Parallel execution
+
+Derive the declaration from `ParallelProcess` instead of `LinearProcess` to generate a parallel flow. The same step contracts, bindings, aliases, optionality and ordering rules apply.
+
+The generated scheduler starts all ready steps, awaits `Task.WhenAny`, observes completed results, then starts newly ready successors. A successor runs as soon as its own dependencies finish; it does not wait for unrelated steps or an entire topological layer. `Main` steps are called directly and may overlap while awaiting. `Any` steps are constructed and executed through `Task.Run`. Coordination, output assembly and failure logging resume on the caller's main-thread synchronization context.
+
+Each step retains a `Task<StepResult<ItsOutput>>` and its concrete output local. A separate collection of base `Task` references is used only to wait for completions; outputs are never boxed or retrieved through runtime casts.
+
+One linked cancellation source belongs to each parallel run. A required failure stops further launches, cancels other started steps, and awaits every one of them before returning the failure. External cancellation does the same cleanup and propagates cancellation. Additional failures during shutdown are logged without replacing the primary required-step failure. Optional failures do not cancel independent work and still satisfy `After` dependencies.
 
 ## Data binding
 
@@ -76,11 +86,11 @@ Keep fallback inside a required step: accept fallback data in its Input, handle 
 
 Cancellation propagates as `OperationCanceledException`, including from optional steps. The executor awaits the current step and its cleanup before returning. A step owns its operations: await their completion/cleanup before completing `ExecuteAsync`; do not leave detached work behind. Cancellation is checked before construction and after completion, including when a step returns success. An unrelated `OperationCanceledException` while the process token is not cancelled is treated as a step failure.
 
-The future parallel executor must stop starting steps on required failure, cancel those already running, and await their completion. The current linear executor has no other concurrently running steps to cancel.
+The parallel executor drains all started steps on failure or cancellation. The linear executor has no other concurrently running steps to cancel.
 
 ## Declaration boundaries
 
-Processes are top-level, non-generic, non-abstract partial classes directly deriving from `LinearProcess`. Steps and their data contracts must be accessible to the process. The generated constructor and `ExecuteAsync` belong to the generator.
+Processes are top-level, non-generic, non-abstract partial classes directly deriving from `LinearProcess` or `ParallelProcess`. Steps and their data contracts must be accessible to the process. The generated constructor and `ExecuteAsync` belong to the generator.
 
 `Steps` must be a directly initialized static `StepDescription[]`. Explicit/implicit array creation and target-typed `new` are supported. Settings use constants, `const` fields, `nameof`, `typeof`, nested `After` initializers and indexer alias initializers. Calls such as `BuildSteps()` are diagnosed. The generator reads syntax and symbols; it does not execute constructors or setters. Mutating the declaration array at runtime does not change generated execution.
 
