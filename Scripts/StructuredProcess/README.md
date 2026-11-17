@@ -90,6 +90,8 @@ The parallel executor drains all started steps on failure or cancellation. The l
 
 ## Declaration boundaries
 
+Generated C# uses ordinary imports and short type names where Roslyn resolves them unambiguously. Qualification is retained where a user type/member would shadow the intended symbol. Identifier escaping (`@`) is retained for keywords, and omitted for ordinary names. The scheduler's `task0`, `task1`, etc. are local variables, not public step IDs; twenty occurrences produce `task0` through `task19`.
+
 Processes are top-level, non-generic, non-abstract partial classes directly deriving from `LinearProcess` or `ParallelProcess`. Steps and their data contracts must be accessible to the process. The generated constructor and `ExecuteAsync` belong to the generator.
 
 `Steps` must be a directly initialized static `StepDescription[]`. Explicit/implicit array creation and target-typed `new` are supported. Settings use constants, `const` fields, `nameof`, `typeof`, nested `After` initializers and indexer alias initializers. Calls such as `BuildSteps()` are diagnosed. The generator reads syntax and symbols; it does not execute constructors or setters. Mutating the declaration array at runtime does not change generated execution.

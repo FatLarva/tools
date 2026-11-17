@@ -52,8 +52,8 @@ namespace Tools.StructuredProcess.Generator
                 ProcessGraph.Bind(model, cancellationToken);
                 return new GenerationResult
                 {
-                    Name = type.ToDisplayString() + ".Process.g.cs",
-                    Source = ProcessEmitter.Emit(model)
+                    Name = type.ToDisplayString().Replace("@", "") + ".Process.g.cs",
+                    Source = ProcessEmitter.Emit(model, context.SemanticModel.Compilation, cancellationToken)
                 };
             }
             catch (DeclarationError error)

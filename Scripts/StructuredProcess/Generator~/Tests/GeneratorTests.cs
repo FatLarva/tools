@@ -362,6 +362,126 @@ public partial class Process : LinearProcess
         }
 
         [Test]
+        public void DoesNotRewriteDirectiveTextInsideDataIds()
+        {
+            var generated = Generate(@"
+public partial class Process : LinearProcess
+{
+    public static readonly StepDescription[] Steps =
+    {
+        new StepDescription(typeof(SourceStep))
+        {
+            Inputs = { [""seed""] = ""#nullable disable"" }
+        }
+    };
+    public struct Output : IProcessOutput
+    {
+    }
+}");
+            Assert.That(generated.Diagnostics, Is.Empty);
+            Assert.That(generated.Compilation.GetDiagnostics().Where(item => item.Severity == DiagnosticSeverity.Error), Is.Empty);
+            Assert.That(generated.Compilation.SyntaxTrees.Last().ToString(), Does.Contain("Data(\"#nullable disable\")"));
+        }
+
+        [Test]
+        public void UsesReadableNamesWhenTheyAreUnambiguous()
+        {
+            var generated = Generate(@"
+public partial class Process : ParallelProcess
+{
+    public static readonly StepDescription[] Steps =
+    {
+        new StepDescription(typeof(SourceStep)) { Thread = StepThread.Any },
+        new StepDescription(typeof(ConsumeStep))
+    };
+    public struct Output : IProcessOutput
+    {
+        [Data(""text"")] public string Text;
+    }
+}");
+            Assert.That(generated.Diagnostics, Is.Empty);
+            Assert.That(generated.Compilation.GetDiagnostics().Where(item => item.Severity == DiagnosticSeverity.Error), Is.Empty);
+            string emitted = generated.Compilation.SyntaxTrees.Last().ToString();
+            Assert.That(emitted, Does.Contain("new SourceStep.Input"));
+            Assert.That(emitted, Does.Contain("Task<StepResult<SourceStep.Output>>"));
+            Assert.That(emitted, Does.Contain("Task.WhenAny(running)"));
+            Assert.That(emitted, Does.Contain("__processInput.Seed"));
+            Assert.That(emitted, Does.Not.Contain("@Seed"));
+            Assert.That(emitted, Does.Not.Contain("global::Fixture.SourceStep"));
+        }
+
+        [Test]
+        public void KeepsQualificationWhenUserMembersShadowFrameworkNames()
+        {
+            var generated = Generate(@"
+public partial class Process : ParallelProcess
+{
+    public static object Task;
+    public class CancellationToken
+    {
+    }
+    public class StepResult<T>
+    {
+    }
+    public static readonly StepDescription[] Steps =
+    {
+        new StepDescription(typeof(SourceStep)) { Thread = StepThread.Any }
+    };
+    public struct Output : IProcessOutput
+    {
+        [Data(""value"")] public string Value;
+    }
+}");
+            Assert.That(generated.Diagnostics, Is.Empty);
+            Assert.That(generated.Compilation.GetDiagnostics().Where(item => item.Severity == DiagnosticSeverity.Error), Is.Empty);
+            string emitted = generated.Compilation.SyntaxTrees.Last().ToString();
+            Assert.That(emitted, Does.Not.Contain("await Task.WhenAny"));
+        }
+
+        [Test]
+        public async Task PreservesEscapingForKeywordIdentifiers()
+        {
+            string source = @"
+public sealed class KeywordStep : IProcessStep<KeywordStep.Output>
+{
+    private readonly Input _input;
+    public struct Input : IProcessInput
+    {
+        public string @class;
+    }
+    public struct Output : IProcessOutput
+    {
+        public string @namespace;
+    }
+    public KeywordStep(Input input)
+    {
+        _input = input;
+    }
+    public ValueTask<StepResult<Output>> ExecuteAsync(CancellationToken cancellationToken)
+    {
+        return new ValueTask<StepResult<Output>>(StepResult<Output>.Success(new Output { @namespace = _input.@class }));
+    }
+}
+public partial class @event : LinearProcess
+{
+    public static readonly StepDescription[] Steps = { new StepDescription(typeof(KeywordStep)) };
+    public struct Output : IProcessOutput
+    {
+        public string @namespace;
+    }
+}
+public static class Entry
+{
+    public static async Task<string> Run()
+    {
+        var result = await new @event(new @event.Input { Class = ""ok"" }).ExecuteAsync();
+        return result.Output.@namespace;
+    }
+}";
+            Assert.That(await Run(source), Is.EqualTo("ok"));
+        }
+
+        [Test]
         public void ReadsStepContractsFromReferencedAssembly()
         {
             var options = new CSharpParseOptions(LanguageVersion.CSharp9);

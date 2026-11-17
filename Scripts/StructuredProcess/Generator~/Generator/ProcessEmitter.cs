@@ -10,11 +10,12 @@ namespace Tools.StructuredProcess.Generator
         private readonly StringBuilder _source = new StringBuilder();
         private int _indent;
 
-        internal static string Emit(ProcessModel process)
+        internal static string Emit(ProcessModel process, Microsoft.CodeAnalysis.Compilation compilation,
+            System.Threading.CancellationToken cancellationToken)
         {
             var emitter = new ProcessEmitter();
             emitter.WriteProcess(process);
-            return emitter._source.ToString();
+            return GeneratedNames.Simplify(emitter._source.ToString(), process, compilation, cancellationToken);
         }
 
         private void WriteProcess(ProcessModel process)
