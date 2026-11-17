@@ -6,7 +6,9 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../Generator/Tools.StructuredProcess.Generator.csproj" />
+    <!-- Driver tests reference the generator directly; shared process tests also use it as an analyzer. -->
+    <ProjectReference Include="../Generator/Tools.StructuredProcess.Generator.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="NUnit" Version="3.14.0" />
@@ -16,6 +18,5 @@
     <Compile Include="../../Declarative/*.cs" Link="Runtime/%(Filename)%(Extension)" />
     <Compile Include="../../../Log/ILog.cs" Link="Runtime/ILog.cs" />
     <Compile Include="../../../../Samples~/StructuredProcessTests/Editor/Parallel*.cs" Link="SharedTests/%(Filename)%(Extension)" />
-    <Analyzer Include="../Generator/bin/$(Configuration)/netstandard2.0/Tools.StructuredProcess.Generator.dll" />
   </ItemGroup>
 </Project>

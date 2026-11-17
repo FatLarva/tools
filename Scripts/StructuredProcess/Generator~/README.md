@@ -37,6 +37,8 @@ The SkillTree development project includes this configured profile. Source Gen B
 
 ## Tests
 
-The .NET test project exercises Roslyn diagnostics, compiles generated code, and executes it. Parallel flow tests are linked from the Unity sample and compiled with the generator as an analyzer. Its test-only `Logging.Log` replacement allows runtime code to be tested without a Unity installation; production uses the existing Tools logger.
+The .NET test project exercises Roslyn diagnostics, compiles generated code, and executes it. Parallel flow tests are linked from the Unity sample and compiled with the generator as an analyzer. The project reference supplies the generator both as an analyzer for those fixtures and as an ordinary assembly for tests that instantiate the Roslyn driver. It resolves the current build output instead of depending on a fixed DLL path. Build the solution once after a fresh checkout so the IDE can load the compiled generator.
+
+Its test-only `Logging.Log` replacement allows runtime code to be tested without a Unity installation; production uses the existing Tools logger.
 
 The **Structured Process Tests** UPM sample runs generated linear and parallel processes in Unity Edit Mode, including main-thread continuations, thread-pool step construction, concurrent readiness and cancellation that waits for every started step's cleanup. It does not depend on the examples sample.
