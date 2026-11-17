@@ -1,0 +1,8 @@
+{
+    "name": "Tools.StructuredProcess.Tests",
+    "rootNamespace": "Tools.Samples.StructuredProcessTests",
+    "references": ["Tools.StructuredProcess", "Log"],
+    "includePlatforms": ["Editor"],
+    "autoReferenced": false,
+    "optionalUnityReferences": ["TestAssemblies"]
+}

@@ -1,0 +1,7 @@
+{
+    "name": "Tools.StructuredProcess",
+    "rootNamespace": "Tools.StructuredProcess.Declarative",
+    "references": ["Log"],
+    "autoReferenced": true,
+    "noEngineReferences": true
+}

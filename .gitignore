@@ -72,3 +72,7 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# Authored source generator projects
+!/Scripts/StructuredProcess/Generator~/**/*.csproj
+!/Scripts/StructuredProcess/Generator~/*.sln

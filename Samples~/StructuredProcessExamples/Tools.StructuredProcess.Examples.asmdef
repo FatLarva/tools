@@ -1,0 +1,6 @@
+{
+    "name": "Tools.StructuredProcess.Examples",
+    "rootNamespace": "Tools.Samples.StructuredProcess",
+    "references": ["Tools.StructuredProcess", "Log"],
+    "autoReferenced": false
+}

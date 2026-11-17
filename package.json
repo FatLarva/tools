@@ -15,6 +15,16 @@
 			"displayName": "State Machine Tests",
 			"description": "Edit Mode tests for Unity Test Framework. Install com.unity.test-framework before importing.",
 			"path": "Samples~/StateMachineTests"
+		},
+		{
+			"displayName": "Structured Process Examples",
+			"description": "Source-generated typed processes with aliases, ordering, optional steps and user-owned fallback.",
+			"path": "Samples~/StructuredProcessExamples"
+		},
+		{
+			"displayName": "Structured Process Tests",
+			"description": "Independent Edit Mode tests for generated processes. Requires com.unity.test-framework.",
+			"path": "Samples~/StructuredProcessTests"
 		}
 	]
-  }
+}
