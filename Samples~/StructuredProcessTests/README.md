@@ -1,6 +1,6 @@
 # Structured Process Tests
 
-Install Unity Test Framework (`com.unity.test-framework`), then import this sample from the Tools package. Open **Window > General > Test Runner**, choose **EditMode**, and run `Tools.Samples.StructuredProcessTests.ProcessTests`.
+Install Unity Test Framework (`com.unity.test-framework`), then import this sample from the Tools package. Open **Window > General > Test Runner**, choose **EditMode**, and run the tests in the `Tools.Samples.StructuredProcessTests` namespace.
 
 These are real source-generated processes compiled by Unity using the analyzer shipped in Tools. Neither Source Gen Builder nor the examples sample is required.
 
