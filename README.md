@@ -12,6 +12,23 @@ https://github.com/FatLarva/tools.git#v1.2.0
 
 Package Manager resolves uGUI (including TextMeshPro), Input System, and the Image Conversion module from the Tools package manifest.
 
+## Optional values in the Inspector
+
+Use `Tools.Optional<T>` on a serialized field to give it an explicit override checkbox.
+
+```csharp
+[SerializeField] private Tools.Optional<Material> _material;
+
+public Material ResolveMaterial(Material fallback)
+{
+    return _material.GetValueOrDefault(fallback);
+}
+```
+
+An unchecked field uses the fallback. A checked Material field set to None explicitly overrides it with `null`. Zero and false also work as explicit overrides. Use `HasValue` or `TryGetValue(out var value)` to check presence. Reading `Value` on an empty optional throws `InvalidOperationException`. The Inspector uses Unity's usual serialization rules for `T`.
+
+Clearing the checkbox clears the serialized value, including asset references inside it. Checking it again while the field is still open restores its previous value. Switching the Inspector to another object, closing it, or reloading scripts discards the copy. A locked Inspector that still displays the object keeps its copy. Changing a containing array or list invalidates its cached entries so a reordered row cannot inherit another row's value. Standard Undo also restores a cleared value.
+
 ## State machines
 
 The independent synchronous and asynchronous machines use generic IDs such as enums or `int`. States use typed payload and output contracts and request transitions through their entry context. A resolver converts the source output to the destination payload. Cancel and await the async machine's `RunAsync` to finish state cleanup.
