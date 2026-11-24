@@ -30,7 +30,7 @@ namespace Tools.UsageTokens
         
         public bool TryRedeemToken(TToken token)
         {
-            return !_tokensInUse.Remove(token);
+            return _tokensInUse.Remove(token);
         }
 
         protected int GetNextTokenId()
