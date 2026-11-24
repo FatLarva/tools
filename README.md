@@ -4,13 +4,21 @@ A Unity package with state machines, source-generated structured processes, UI g
 
 ## Install
 
-Tools 1.2.0 requires Unity 6.6 or later. In Unity Package Manager, choose **Install package from git URL** and enter the release URL.
+Tools 2.0.0 requires Unity 6.6 or later. In Unity Package Manager, choose **Install package from git URL** and enter the release URL.
 
 ```text
-https://github.com/FatLarva/tools.git#v1.2.0
+https://github.com/FatLarva/tools.git#v2.0.0
 ```
 
 Package Manager resolves uGUI (including TextMeshPro), Input System, and the Image Conversion module from the Tools package manifest.
+
+## Upgrading to 2.0
+
+- Replace `await UnityUiThread.Thread` with `await Awaitable.MainThreadAsync()`. The old Unity thread helper and its awaiter were removed.
+- Replace `SmoothSunburstGraphic` components with `SunburstGraphic` and select **Smooth** in **Profile**. Reassign references to the replaced component.
+- `TryRedeemToken` returns `true` when it successfully redeems the token. A repeated redemption returns `false`.
+
+This release adds the interactive Graphic Primitives sample, cutouts with Scene view editing, and opt-in StructuredProcess traces. It also fixes parallel failure handling, folder replacement, and mixed-selection editing in the MinMax drawers.
 
 ## Optional values in the Inspector
 
