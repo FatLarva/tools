@@ -13,6 +13,8 @@ namespace FatLarva.Tools.Samples
         [SerializeField] private RoundedRectGraphic _roundedRect;
         [SerializeField] private ArrowGraphic _arrow;
         [SerializeField] private SunburstGraphic _sunburst;
+        [SerializeField] private InversedEllipseGraphic _inversedEllipse;
+        [SerializeField] private InversedRectGraphic _inversedRect;
 
         [SerializeField] private Slider _sweepSlider;
         [SerializeField] private Text _sweepLabel;
@@ -20,6 +22,7 @@ namespace FatLarva.Tools.Samples
         [SerializeField] private Slider _radiusSlider;
         [SerializeField] private Slider _arrowStrokeSlider;
         [SerializeField] private Toggle _sunburstSmoothToggle;
+        [SerializeField] private Slider _holeSizeSlider;
         [SerializeField] private Button _hitTarget;
         [SerializeField] private Text _hitStatus;
         [SerializeField] private Button _resetButton;
@@ -31,10 +34,13 @@ namespace FatLarva.Tools.Samples
         private float _initialRadius;
         private float _initialStroke;
         private bool _initialSmooth;
+        private Vector2 _initialEllipseHoleSize;
+        private Vector2 _initialRectHoleSize;
         private string _initialHitStatus;
         private int _hitCount;
         private bool _initialized;
         private bool _updatingEllipseControls;
+        private bool _hasInverseControls;
 
         private void Awake()
         {
@@ -54,6 +60,14 @@ namespace FatLarva.Tools.Samples
             _initialRadius = _roundedRect.CornerRadius;
             _initialStroke = _arrow.StrokeThickness;
             _initialSmooth = _sunburst.Profile == SunburstGraphic.ProfileType.Smooth;
+            _hasInverseControls = _inversedEllipse != null && _inversedRect != null && _holeSizeSlider != null;
+            if (_hasInverseControls)
+            {
+                _initialEllipseHoleSize = _inversedEllipse.HoleSize;
+                _initialRectHoleSize = _inversedRect.HoleSize;
+                _holeSizeSlider.SetValueWithoutNotify(1f);
+            }
+
             _initialHitStatus = _hitStatus.text;
             _initialized = true;
         }
@@ -79,6 +93,11 @@ namespace FatLarva.Tools.Samples
             _radiusSlider.onValueChanged.AddListener(SetRoundedRadius);
             _arrowStrokeSlider.onValueChanged.AddListener(SetArrowStroke);
             _sunburstSmoothToggle.onValueChanged.AddListener(SetSunburstSmooth);
+            if (_hasInverseControls)
+            {
+                _holeSizeSlider.onValueChanged.AddListener(SetHoleSizeScale);
+            }
+
             _hitTarget.onClick.AddListener(HitInvisibleTarget);
             _resetButton.onClick.AddListener(ResetControls);
         }
@@ -98,6 +117,11 @@ namespace FatLarva.Tools.Samples
             _radiusSlider.onValueChanged.RemoveListener(SetRoundedRadius);
             _arrowStrokeSlider.onValueChanged.RemoveListener(SetArrowStroke);
             _sunburstSmoothToggle.onValueChanged.RemoveListener(SetSunburstSmooth);
+            if (_hasInverseControls)
+            {
+                _holeSizeSlider.onValueChanged.RemoveListener(SetHoleSizeScale);
+            }
+
             _hitTarget.onClick.RemoveListener(HitInvisibleTarget);
             _resetButton.onClick.RemoveListener(ResetControls);
         }
@@ -177,6 +201,19 @@ namespace FatLarva.Tools.Samples
             _sunburstSmoothToggle.SetIsOnWithoutNotify(smooth);
         }
 
+        public void SetHoleSizeScale(float scale)
+        {
+            if (!_hasInverseControls || !float.IsFinite(scale))
+            {
+                return;
+            }
+
+            scale = Mathf.Clamp(scale, _holeSizeSlider.minValue, _holeSizeSlider.maxValue);
+            _inversedEllipse.HoleSize = _initialEllipseHoleSize * scale;
+            _inversedRect.HoleSize = _initialRectHoleSize * scale;
+            _holeSizeSlider.SetValueWithoutNotify(scale);
+        }
+
         public void HitInvisibleTarget()
         {
             _hitCount++;
@@ -191,6 +228,7 @@ namespace FatLarva.Tools.Samples
             SetRoundedRadius(_initialRadius);
             SetArrowStroke(_initialStroke);
             SetSunburstSmooth(_initialSmooth);
+            SetHoleSizeScale(1f);
             _hitCount = 0;
             _hitStatus.text = _initialHitStatus;
         }

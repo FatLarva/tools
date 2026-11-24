@@ -16,6 +16,7 @@ This editable uGUI scene shows procedural shapes from the Tools package. Compare
 | Rounded Rect | Drag **Corner Radius** and follow the dashed outline around the corners. |
 | Arrow | Drag **Stroke Width** to change the width of the curve. |
 | Sunburst | Toggle **Smooth profile** to compare the two profiles alongside the fixed sharp preview. |
+| Inverse Shapes | Drag **Hole Size** to resize both cutouts and reveal the striped background. |
 | Non-Drawing | Click inside the outlined target and watch the hit count update. |
 
 Use **Reset** to restore the authored settings and clear the hit count. Triangle, Closed Spline, Curved Rect, and Curved Inside Rect provide additional shapes to inspect in the scene. The Curved Rect example also shows clipping with a uGUI stencil mask.
@@ -24,5 +25,6 @@ Use **Reset** to restore the authored settings and clear the hit count. Triangle
 
 - Select a shape in the Hierarchy to edit its geometry, fill, stroke, or rendering settings in the Inspector. Try **Segmented Fill** on an ellipse to adjust its slice count, inner radius, and gap independently.
 - **Arrow Graphic** and **Closed Spline Graphic** share the **Edit Path** controls. Select a point to edit its Bézier handles. Choose **Broken**, **Mirrored**, or **Continuous**. **Insert Point** splits the next span without changing its shape.
-- The spline closes from the last point to the first. Use **Mode** to choose fill, outline, or both. The path should form a simple contour.
+- The spline closes from the last point to the first. Use **Draw Mode** to choose fill, outline, or both. The path should form a simple contour.
+- Select either inverse shape to edit its **Hole Center** and **Hole Size**. The ellipse has **Keep Circle**, and the rectangle has **Keep Square** and **Corner Radius**.
 - To texture an image-based shape, assign a sprite under **Rendering**. Use rectangular Sprite Atlas packing with **Allow Rotation** and **Tight Packing** disabled for these generated meshes. [Unity Sprite Atlas settings](https://docs.unity.com/en-us/engine/6000.0/manual/unity2d/sprite/atlas/sprite-atlas-reference)
