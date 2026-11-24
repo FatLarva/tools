@@ -7,6 +7,8 @@ namespace Tools.FileSystem
 {
     public static class DirectoryHelper
     {
+        private static readonly object OverwriteLock = new();
+
         public static string GetMostUsedExtension(string folder, string[] ignoreExtensions = null)
         {
             var files = Directory.GetFiles(folder);
@@ -86,22 +88,144 @@ namespace Tools.FileSystem
             }
         }
         
+        /// <summary>Replaces the destination with the immediate files of the source. The existing destination is
+        /// kept until all files are staged. With move semantics, staging is rolled back on failure.</summary>
         public static void OverwriteFilesInFolder(string sourceFolder, string destinationFolder, bool shouldKeepSourceIntact)
         {
-            if (Directory.Exists(destinationFolder))
+            lock (OverwriteLock)
             {
-                Directory.Delete(destinationFolder, true);
-            }
+                var source = NormalizeDirectoryPath(sourceFolder);
+                var destination = NormalizeDirectoryPath(destinationFolder);
+                var comparison = Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                if (IsSameOrBelow(source, destination, comparison) || IsSameOrBelow(destination, source, comparison))
+                {
+                    throw new ArgumentException("The source and destination directories must not overlap.", nameof(destinationFolder));
+                }
 
-            Directory.CreateDirectory(destinationFolder);
-                
-            if (shouldKeepSourceIntact)
-            {
-                CopyFilesBetweenFolders(sourceFolder, destinationFolder, true);
+                var parent = Path.GetDirectoryName(destination);
+                if (parent == null)
+                {
+                    throw new ArgumentException("The destination must not be a filesystem root.", nameof(destinationFolder));
+                }
+
+                var files = Directory.GetFiles(source);
+                RejectLinkedPath(source);
+                RejectLinkedPath(destination);
+                StageAndReplace(files, destination, parent, shouldKeepSourceIntact);
             }
-            else
+        }
+
+        private static void StageAndReplace(string[] files, string destination, string parent, bool copy)
+        {
+            var work = Path.Combine(parent, ".tools-overwrite-" + Guid.NewGuid().ToString("N"));
+            var staged = Path.Combine(work, "staged");
+            var previous = Path.Combine(work, "previous");
+            var movedFiles = new List<(string Source, string Staged)>();
+            bool hasBackup = false;
+            bool keepRecoveryFiles = false;
+            try
             {
-                MoveFilesBetweenFolders(sourceFolder, destinationFolder);
+                Directory.CreateDirectory(staged);
+                foreach (var file in files)
+                {
+                    var target = Path.Combine(staged, Path.GetFileName(file));
+                    if (copy)
+                    {
+                        File.Copy(file, target);
+                    }
+                    else
+                    {
+                        File.Move(file, target);
+                        movedFiles.Add((file, target));
+                    }
+                }
+
+                if (Directory.Exists(destination))
+                {
+                    Directory.Move(destination, previous);
+                    hasBackup = true;
+                }
+
+                Directory.Move(staged, destination);
+            }
+            catch (Exception original)
+            {
+                var errors = new List<Exception> { original };
+                if (hasBackup)
+                {
+                    TryRestore(() => Directory.Move(previous, destination), errors);
+                }
+
+                foreach (var file in movedFiles)
+                {
+                    TryRestore(() => File.Move(file.Staged, file.Source), errors);
+                }
+
+                if (errors.Count > 1)
+                {
+                    keepRecoveryFiles = true;
+                    throw new AggregateException($"The folder replacement could not be fully rolled back. Recovery files are in '{work}'.", errors);
+                }
+
+                throw;
+            }
+            finally
+            {
+                if (!keepRecoveryFiles)
+                {
+                    TryRemoveWorkDirectory(work);
+                }
+            }
+        }
+
+        private static bool IsSameOrBelow(string directory, string path, StringComparison comparison)
+        {
+            var last = directory[directory.Length - 1];
+            var prefix = last == Path.DirectorySeparatorChar || last == Path.AltDirectorySeparatorChar
+                ? directory
+                : directory + Path.DirectorySeparatorChar;
+            return string.Equals(directory, path, comparison) || path.StartsWith(prefix, comparison);
+        }
+
+        private static string NormalizeDirectoryPath(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            var trimmed = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return trimmed.Length < Path.GetPathRoot(fullPath).Length ? fullPath : trimmed;
+        }
+
+        private static void RejectLinkedPath(string path)
+        {
+            for (var directory = new DirectoryInfo(path); directory != null; directory = directory.Parent)
+            {
+                if (directory.Exists && (directory.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new IOException($"A linked directory cannot be used to replace files safely: '{directory.FullName}'.");
+                }
+            }
+        }
+
+        private static void TryRestore(Action restore, List<Exception> errors)
+        {
+            try
+            {
+                restore();
+            }
+            catch (Exception error)
+            {
+                errors.Add(error);
+            }
+        }
+
+        private static void TryRemoveWorkDirectory(string path)
+        {
+            try
+            {
+                Directory.Delete(path, true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // A cleanup failure after a successful replacement must not signal that the replacement failed.
             }
         }
         
