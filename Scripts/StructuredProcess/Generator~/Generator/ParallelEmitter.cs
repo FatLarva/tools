@@ -135,6 +135,10 @@ namespace Tools.StructuredProcess.Generator
                 .Select(item => " && completed[" + Index(item) + "]"));
             Open("if (task" + index + " == null" + dependencies + ")");
             Line("token.ThrowIfCancellationRequested();");
+            Open("if (running.Exists(static task => task.IsCompleted))");
+            Line("continue;");
+            Close();
+            Open("try");
             Line("var input" + index + " = new " + Names.Full(step.InputType));
             Line("{");
             _indent++;
@@ -147,10 +151,15 @@ namespace Tools.StructuredProcess.Generator
             Line("};");
             string invocation = "__ExecuteStep" + index + "Async(input" + index + ", token)";
             Line("task" + index + " = " + (step.AnyThread ? TaskType + ".Run(() => " + invocation + ", token)" : invocation) + ";");
-            Line("running.Add(task" + index + ");");
-            Open("if (task" + index + ".IsCompleted)");
-            Line("continue;");
             Close();
+            Open("catch (global::System.OperationCanceledException) when (token.IsCancellationRequested)");
+            Line("throw;");
+            Close();
+            Open("catch (global::System.Exception exception)");
+            Line("var result = " + Runtime + "StepResult<" + Names.Full(step.OutputType) + ">.Failure(exception);");
+            Line("task" + index + " = " + TaskType + ".FromResult(result);");
+            Close();
+            Line("running.Add(task" + index + ");");
             Close();
         }
 
