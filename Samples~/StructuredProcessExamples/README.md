@@ -1,6 +1,6 @@
 # Structured Process Examples
 
-For a larger graph, run **Tools > Structured Process > Run 20-step match example** and open `MatchPreparation/PrepareMatchProcess.cs`. Its README includes the full dependency graph and thread assignments. The run validates all data and explicit dependencies against a recorded execution trace.
+For a larger graph, run **Tools > Structured Process > Run 20-step match example**. It opens the **Structured Process Trace** window with a live timeline of the run. Select a step to see its dependencies, thread policy, status changes, and timing. Open `MatchPreparation/PrepareMatchProcess.cs` and its README for the full dependency graph. The example also validates data and explicit dependencies using its own work log and prints the observed thread IDs and overlap in the Console.
 
 Import this sample from the Tools package and select **Tools > Structured Process > Run example** or **Run parallel example**. The Tools package includes the generator DLL; Source Gen Builder is not required to run either example.
 

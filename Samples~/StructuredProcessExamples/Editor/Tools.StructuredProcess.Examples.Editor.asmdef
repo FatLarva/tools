@@ -1,7 +1,7 @@
 {
     "name": "Tools.StructuredProcess.Examples.Editor",
     "rootNamespace": "Tools.Samples.StructuredProcess",
-    "references": ["Tools.StructuredProcess.Examples", "Tools.StructuredProcess", "Log"],
+    "references": ["Tools.StructuredProcess.Examples", "Tools.StructuredProcess", "Tools.StructuredProcess.Editor", "Log"],
     "includePlatforms": ["Editor"],
     "autoReferenced": false
 }

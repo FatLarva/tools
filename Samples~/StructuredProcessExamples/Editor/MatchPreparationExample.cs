@@ -3,6 +3,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Tools.Samples.StructuredProcess.MatchPreparation;
+using Tools.StructuredProcess.Declarative;
+using Tools.StructuredProcess.Editor;
 using UnityEditor;
 using UnityEngine;
 
@@ -13,10 +15,17 @@ namespace Tools.Samples.StructuredProcess
         [MenuItem("Tools/Structured Process/Run 20-step match example")]
         public static async void Run()
         {
-            await RunAsync();
+            var trace = new ProcessTrace();
+            StructuredProcessTraceWindow.ShowTrace(trace);
+            await RunAsync(trace, default);
         }
 
-        public static async Task<MatchPreparationWork> RunAsync(CancellationToken cancellationToken = default)
+        public static Task<MatchPreparationWork> RunAsync(CancellationToken cancellationToken = default)
+        {
+            return RunAsync(null, cancellationToken);
+        }
+
+        private static async Task<MatchPreparationWork> RunAsync(ProcessTrace processTrace, CancellationToken cancellationToken)
         {
             var work = new MatchPreparationWork();
             var process = new PrepareMatchProcess(new PrepareMatchProcess.Input
@@ -25,7 +34,9 @@ namespace Tools.Samples.StructuredProcess
                 PlayerId = PrepareMatchProcess.Player,
                 OpponentId = PrepareMatchProcess.Opponent
             });
-            var result = await process.ExecuteAsync(cancellationToken);
+            var result = processTrace == null
+                ? await process.ExecuteAsync(cancellationToken)
+                : await process.ExecuteAsync(processTrace, cancellationToken);
             if (!result.IsSuccess)
             {
                 throw new InvalidOperationException(result.Error, result.Exception);

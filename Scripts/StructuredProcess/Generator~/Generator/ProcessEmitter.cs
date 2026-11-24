@@ -7,6 +7,7 @@ namespace Tools.StructuredProcess.Generator
     internal sealed partial class ProcessEmitter
     {
         private const string Runtime = "global::" + Names.Runtime;
+        private const string TraceRecorder = Runtime + "ProcessBase.TraceRecorder";
         private readonly StringBuilder _source = new StringBuilder();
         private int _indent;
 
@@ -49,6 +50,7 @@ namespace Tools.StructuredProcess.Generator
             Close();
             Line();
 
+            WriteExecutionEntryPoints(process);
             if (process.Parallel && process.Order.Count != 0)
             {
                 WriteParallelExecution(process);
@@ -65,12 +67,55 @@ namespace Tools.StructuredProcess.Generator
             }
         }
 
+        private void WriteExecutionEntryPoints(ProcessModel process)
+        {
+            string result = Runtime + "StepResult<Output>";
+            string task = "global::System.Threading.Tasks.ValueTask<" + result + ">";
+            const string token = "global::System.Threading.CancellationToken cancellationToken";
+            Open("public " + task + " ExecuteAsync(" + token + " = default)");
+            Line("return __ExecuteAsync(null, cancellationToken);");
+            Close();
+            Line();
+
+            Open("public async " + task + " ExecuteAsync(" + Runtime + "ProcessTrace trace, " + token + ")");
+            Line("var recording = trace == null ? null : base.BeginTrace(trace, new " + Runtime + "ProcessTrace.Step[]");
+            Line("{");
+            _indent++;
+            foreach (var step in process.Order)
+            {
+                string id = step.Id ?? Names.Full(step.Type).Replace("global::", "");
+                string dependencies = string.Concat(step.Dependencies.OrderBy(item => item.Index)
+                    .Select(item => ", " + Index(item)));
+                Line("new " + Runtime + "ProcessTrace.Step(" + Literal(id) + ", typeof(" + Names.Full(step.Type) + "), "
+                    + (step.Optional ? "true" : "false") + ", " + Runtime + "StepThread."
+                    + (step.AnyThread ? "Any" : "Main") + dependencies + "),");
+            }
+
+            _indent--;
+            Line("});");
+            Open("try");
+            Line("var result = await __ExecuteAsync(recording, cancellationToken);");
+            Line("recording?.Finish(result);");
+            Line("return result;");
+            Close();
+            Open("catch (global::System.OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)");
+            Line("recording?.Finish(exception, true);");
+            Line("throw;");
+            Close();
+            Open("catch (global::System.Exception exception)");
+            Line("recording?.Finish(exception, false);");
+            Line("throw;");
+            Close();
+            Close();
+            Line();
+        }
+
         private void WriteLinearExecution(ProcessModel process)
         {
             string result = Runtime + "StepResult<Output>";
-            string signature = "public " + (process.Order.Count == 0 ? "" : "async ")
+            string signature = "private " + (process.Order.Count == 0 ? "" : "async ")
                 + "global::System.Threading.Tasks.ValueTask<" + result
-                + "> ExecuteAsync(global::System.Threading.CancellationToken cancellationToken = default)";
+                + "> __ExecuteAsync(" + TraceRecorder + " trace, global::System.Threading.CancellationToken cancellationToken)";
             Open(signature);
             Line("cancellationToken.ThrowIfCancellationRequested();");
             foreach (var step in process.Order)
@@ -104,26 +149,20 @@ namespace Tools.StructuredProcess.Generator
             Line("// " + (step.AnyThread ? "Any thread permitted; executed sequentially here." : "Main thread."));
             Line(resultType + " " + variable + ";");
             Line("cancellationToken.ThrowIfCancellationRequested();");
+            Line("trace?.StepStarted(" + number + ");");
             Open("try");
-            Line("var step" + number + " = new " + Names.Full(step.Type) + "(new " + Names.Full(step.InputType));
-            Line("{");
-            _indent++;
-            foreach (var binding in step.Bindings)
-            {
-                Line("@" + binding.Target.Name + " = " + Value(binding) + ",");
-            }
-
-            _indent--;
-            Line("});");
+            WriteStepInput(step, "var step" + number + " = new " + Names.Full(step.Type) + "(", "});");
             Line(variable + " = await step" + number + ".ExecuteAsync(cancellationToken);");
             Close();
-            Open("catch (global::System.OperationCanceledException) when (cancellationToken.IsCancellationRequested)");
+            Open("catch (global::System.OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)");
+            Line("trace?.StepCanceled(" + number + ", exception);");
             Line("throw;");
             Close();
             Open("catch (global::System.Exception exception)");
             Line(variable + " = " + resultType + ".Failure(exception);");
             Close();
             Line("cancellationToken.ThrowIfCancellationRequested();");
+            Line("trace?.StepFinished(" + number + ", " + variable + ");");
             Open("if (!" + variable + ".IsSuccess)");
             Line("ReportStepFailure(" + id + ", " + variable + ".Error, " + variable + ".Exception);");
             if (!step.Optional)
@@ -137,6 +176,26 @@ namespace Tools.StructuredProcess.Generator
             {
                 Line("var output" + number + " = " + variable + ".Output;");
             }
+
+            foreach (var successor in process.Order.Where(item => item.Dependencies.Contains(step)
+                && item.Dependencies.All(dependency => dependency.Index <= step.Index)))
+            {
+                Line("trace?.StepReady(" + Index(successor) + ");");
+            }
+        }
+
+        private void WriteStepInput(StepModel step, string prefix, string suffix)
+        {
+            Line(prefix + "new " + Names.Full(step.InputType));
+            Line("{");
+            _indent++;
+            foreach (var binding in step.Bindings)
+            {
+                Line("@" + binding.Target.Name + " = " + Value(binding) + ",");
+            }
+
+            _indent--;
+            Line(suffix);
         }
 
         private static string Value(Binding binding)

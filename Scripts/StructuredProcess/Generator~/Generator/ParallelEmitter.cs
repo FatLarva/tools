@@ -10,8 +10,8 @@ namespace Tools.StructuredProcess.Generator
         private void WriteParallelExecution(ProcessModel process)
         {
             string resultType = Runtime + "StepResult<Output>";
-            Open("public async global::System.Threading.Tasks.ValueTask<" + resultType
-                + "> ExecuteAsync(global::System.Threading.CancellationToken cancellationToken = default)");
+            Open("private async global::System.Threading.Tasks.ValueTask<" + resultType
+                + "> __ExecuteAsync(" + TraceRecorder + " trace, global::System.Threading.CancellationToken cancellationToken)");
             Line("cancellationToken.ThrowIfCancellationRequested();");
             Line("using var cancellation = global::System.Threading.CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);");
             Line("var token = cancellation.Token;");
@@ -43,6 +43,21 @@ namespace Tools.StructuredProcess.Generator
             Open("if (failed)");
             Line("return failure;");
             Close();
+            var dependentSteps = process.Order.Where(step => step.Dependencies.Count != 0).ToArray();
+            if (dependentSteps.Length != 0)
+            {
+                Open("if (trace != null)");
+                foreach (var step in dependentSteps)
+                {
+                    string index = Index(step);
+                    Open("if (task" + index + " == null" + DependenciesComplete(step) + ")");
+                    Line("trace.StepReady(" + index + ");");
+                    Close();
+                }
+
+                Close();
+            }
+
             foreach (var step in process.Order)
             {
                 WriteStart(step);
@@ -131,32 +146,24 @@ namespace Tools.StructuredProcess.Generator
         private void WriteStart(StepModel step)
         {
             string index = Index(step);
-            string dependencies = string.Concat(step.Dependencies.OrderBy(item => item.Index)
-                .Select(item => " && completed[" + Index(item) + "]"));
-            Open("if (task" + index + " == null" + dependencies + ")");
+            Open("if (task" + index + " == null" + DependenciesComplete(step) + ")");
             Line("token.ThrowIfCancellationRequested();");
             Open("if (running.Exists(static task => task.IsCompleted))");
             Line("continue;");
             Close();
+            Line("trace?.StepStarted(" + index + ");");
             Open("try");
-            Line("var input" + index + " = new " + Names.Full(step.InputType));
-            Line("{");
-            _indent++;
-            foreach (var binding in step.Bindings)
-            {
-                Line("@" + binding.Target.Name + " = " + Value(binding) + ",");
-            }
-
-            _indent--;
-            Line("};");
-            string invocation = "__ExecuteStep" + index + "Async(input" + index + ", token)";
+            WriteStepInput(step, "var input" + index + " = ", "};");
+            string invocation = "__ExecuteStep" + index + "Async(input" + index + ", token, trace)";
             Line("task" + index + " = " + (step.AnyThread ? TaskType + ".Run(() => " + invocation + ", token)" : invocation) + ";");
             Close();
-            Open("catch (global::System.OperationCanceledException) when (token.IsCancellationRequested)");
+            Open("catch (global::System.OperationCanceledException exception) when (token.IsCancellationRequested)");
+            Line("trace?.StepCanceled(" + index + ", exception);");
             Line("throw;");
             Close();
             Open("catch (global::System.Exception exception)");
             Line("var result = " + Runtime + "StepResult<" + Names.Full(step.OutputType) + ">.Failure(exception);");
+            Line("trace?.StepFinished(" + index + ", result);");
             Line("task" + index + " = " + TaskType + ".FromResult(result);");
             Close();
             Line("running.Add(task" + index + ");");
@@ -166,21 +173,33 @@ namespace Tools.StructuredProcess.Generator
         private void WriteStepRunner(StepModel step)
         {
             Line();
+            string index = Index(step);
             string resultType = Runtime + "StepResult<" + Names.Full(step.OutputType) + ">";
-            Open("private static async " + TaskType + "<" + resultType + "> __ExecuteStep" + Index(step)
-                + "Async(" + Names.Full(step.InputType) + " input, global::System.Threading.CancellationToken cancellationToken)");
+            Open("private static async " + TaskType + "<" + resultType + "> __ExecuteStep" + index
+                + "Async(" + Names.Full(step.InputType)
+                + " input, global::System.Threading.CancellationToken cancellationToken, " + TraceRecorder + " trace)");
+            Line(resultType + " result;");
             Open("try");
             Line("cancellationToken.ThrowIfCancellationRequested();");
             Line("var step = new " + Names.Full(step.Type) + "(input);");
-            Line("return await step.ExecuteAsync(cancellationToken);");
+            Line("result = await step.ExecuteAsync(cancellationToken);");
             Close();
-            Open("catch (global::System.OperationCanceledException) when (cancellationToken.IsCancellationRequested)");
+            Open("catch (global::System.OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)");
+            Line("trace?.StepCanceled(" + index + ", exception);");
             Line("throw;");
             Close();
             Open("catch (global::System.Exception exception)");
-            Line("return " + resultType + ".Failure(exception);");
+            Line("result = " + resultType + ".Failure(exception);");
             Close();
+            Line("trace?.StepFinished(" + index + ", result);");
+            Line("return result;");
             Close();
+        }
+
+        private static string DependenciesComplete(StepModel step)
+        {
+            return string.Concat(step.Dependencies.OrderBy(item => item.Index)
+                .Select(item => " && completed[" + Index(item) + "]"));
         }
 
         private void WriteFailureReport(StepModel step)

@@ -88,6 +88,20 @@ Cancellation propagates as `OperationCanceledException`, including from optional
 
 The parallel executor drains all started steps on failure or cancellation. The linear executor has no other concurrently running steps to cancel.
 
+## Trace a run
+
+Pass a new `ProcessTrace` to the generated overload when you want to inspect an execution. The existing overload runs without recording.
+
+```csharp
+var trace = new ProcessTrace();
+var result = await process.ExecuteAsync(trace, cancellationToken);
+var snapshot = trace.GetSnapshot();
+```
+
+`GetSnapshot()` can be called while the process is running. It provides ordered events with elapsed times, step durations, failures, and the final process outcome. Each step exposes its explicit ID or its fully qualified type name, dependency indexes, optionality, and declared thread policy. `Waiting` measures the time from the start of the run until the executor observes all dependency completions. Steps without dependencies begin `Ready`, which covers the time before launch. A step that never launches ends as `Skipped`. The run time of a launched step includes preparation and, for a parallel `Any` step, time queued for the worker.
+
+In the Editor, open **Window > Tools > Structured Process Trace**. Pass a trace to `StructuredProcessTraceWindow.ShowTrace(trace)` from editor code that references the `Tools.StructuredProcess.Editor` assembly. The window follows one trace until you clear it or open another. A **BG** badge and a purple stripe identify parallel steps dispatched to the thread pool. The linear executor uses the calling thread for every step. To try it, import the **Structured Process Examples** UPM sample and choose **Tools > Structured Process > Run 20-step match example**.
+
 ## Declaration boundaries
 
 Generated C# uses ordinary imports and short type names where Roslyn resolves them unambiguously. Qualification is retained where a user type/member would shadow the intended symbol. Identifier escaping (`@`) is retained for keywords, and omitted for ordinary names. The scheduler's `task0`, `task1`, etc. are local variables, not public step IDs; twenty occurrences produce `task0` through `task19`.

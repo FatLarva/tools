@@ -8,4 +8,6 @@ Coverage includes typed results, generated inputs, data-driven ordering, repeate
 
 Parallel tests prove that independent main-thread steps overlap, newly ready successors do not wait for unrelated work, Any steps are constructed and executed off the main thread, and main-thread consumers resume on Unity's context. Required failure cancels and drains remaining work; optional failure preserves independent work. Cleanup failures are observed without replacing the primary failure. These tests use explicit signals instead of timing assumptions. Their scheduler scenarios are shared with the .NET generator test project; thread-affinity tests run specifically in Unity.
 
+The regression scenarios cover exceptions during data binding, failure while another step is being launched, and trace states for success, failure, and cancellation.
+
 Compiler diagnostics are tested separately in `Scripts/StructuredProcess/Generator~/Tests`, because deliberately invalid declarations cannot remain in a normally compiling Unity test assembly.

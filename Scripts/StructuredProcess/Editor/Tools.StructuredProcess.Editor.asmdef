@@ -1,0 +1,7 @@
+{
+    "name": "Tools.StructuredProcess.Editor",
+    "rootNamespace": "Tools.StructuredProcess.Editor",
+    "references": ["Tools.StructuredProcess"],
+    "includePlatforms": ["Editor"],
+    "autoReferenced": false
+}

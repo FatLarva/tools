@@ -1,6 +1,6 @@
 # Twenty-step match preparation
 
-Run **Tools > Structured Process > Run 20-step match example**. This example simulates I/O and performs small CPU calculations; it does not contact a server or create scene objects. The console prints every step's start/end time and thread IDs, plus a summary of overlap and dependency counts.
+Run **Tools > Structured Process > Run 20-step match example** to open the Structured Process Trace window and follow the run. This example simulates I/O and performs small CPU calculations. Its own work log validates the declared dependency order and prints step times, thread IDs, overlap, and dependency counts in the Console.
 
 `PrepareMatchProcess` contains 20 step occurrences, including two independently identified occurrences of `FetchMatchProfileStep`. Thirteen steps use the main thread and seven permit background execution. Settings, session and final readiness bind by their unique types. Other products share `WorkProduct` and bind through data IDs. Profile occurrences override their local IDs through aliases.
 
