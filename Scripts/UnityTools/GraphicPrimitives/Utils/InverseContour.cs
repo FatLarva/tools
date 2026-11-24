@@ -120,14 +120,13 @@ namespace UnityTools.GraphicPrimitives
             }
 
             bool hasFill = mode != ClosedShapeMode.Edge;
-            hole = Rect.MinMaxRect(Mathf.Max(panel.xMin, hole.xMin), Mathf.Max(panel.yMin, hole.yMin),
-                Mathf.Min(panel.xMax, hole.xMax), Mathf.Min(panel.yMax, hole.yMax));
+            hole = ClipHole(panel, hole);
             if (hole.width <= 0f || hole.height <= 0f)
             {
                 return !hasFill || DrawWholePanel(mesh, panel, uv, fill);
             }
 
-            float radius = Mathf.Min(Width(cornerRadius), Mathf.Min(hole.width, hole.height) * 0.5f);
+            float radius = HoleCornerRadius(hole, cornerRadius);
             if (!ellipse && radius <= 0f && hole == panel)
             {
                 return true;
@@ -146,8 +145,7 @@ namespace UnityTools.GraphicPrimitives
             bool hasSmoothing = hasStroke && smoothingDepth > 0f;
             float featherWidth = Width(outerAa);
             bool hasFringe = featherWidth > 0f;
-            int cornerSteps = ellipse ? (Mathf.Clamp(detail, 4, MaximumEllipseDetail) + 3) / 4
-                : Mathf.Clamp(detail, 1, MaximumCornerDetail);
+            int cornerSteps = HoleCornerSteps(detail, ellipse);
             int pointLimit = ellipse ? 4 * cornerSteps : radius > 0f ? 4 * (cornerSteps + 1) : 4;
             int ringCount = 1 + (hasFringe ? 1 : 0) + (hasStroke ? 1 : 0) + (hasSmoothing ? 1 : 0);
 
@@ -306,6 +304,78 @@ namespace UnityTools.GraphicPrimitives
             }
         }
 
+        internal static bool ContainsHole(Rect panel, Rect hole, bool ellipse, float cornerRadius, int detail, Vector2 point)
+        {
+            hole = ClipHole(panel, hole);
+            if (!(point.x > hole.xMin && point.x < hole.xMax && point.y > hole.yMin && point.y < hole.yMax))
+            {
+                return false;
+            }
+
+            float radius = HoleCornerRadius(hole, cornerRadius);
+            if (!ellipse && radius <= 0f)
+            {
+                return true;
+            }
+
+            Vector2 relative = point - hole.center;
+            if (relative.x == 0f && relative.y == 0f)
+            {
+                return true;
+            }
+
+            int quarter = relative.y >= 0f ? (relative.x >= 0f ? 0 : 1) : (relative.x < 0f ? 2 : 3);
+            Vector2 startNormal = Axis(quarter);
+            Vector2 endNormal = Axis((quarter + 1) % 4);
+            Vector2 halfSize = hole.size * 0.5f;
+            Vector2 arcCenter = ArcCenter(startNormal, endNormal, halfSize, radius);
+            Vector2 arcPoint = ellipse ? new Vector2(relative.x / halfSize.x, relative.y / halfSize.y) : relative - arcCenter;
+            float x = Vector2.Dot(arcPoint, startNormal);
+            float y = Vector2.Dot(arcPoint, endNormal);
+            if (!ellipse && (x <= 0f || y <= 0f))
+            {
+                return true;
+            }
+
+            // The angle selects the same chord that the mesh uses, including coarse tessellation.
+            int steps = HoleCornerSteps(detail, ellipse);
+            int segment = Mathf.Min((int)(Math.Atan2(y, x) * steps / (Math.PI * 0.5d)), steps - 1);
+            Vector2 first = SampleHole(startNormal, endNormal, halfSize, arcCenter, radius, steps, segment, ellipse);
+            Vector2 last = SampleHole(startNormal, endNormal, halfSize, arcCenter, radius, steps, segment + 1, ellipse);
+            return Cross(last - first, relative - first) > 0d;
+        }
+
+        private static Rect ClipHole(Rect panel, Rect hole)
+        {
+            return Rect.MinMaxRect(Mathf.Max(panel.xMin, hole.xMin), Mathf.Max(panel.yMin, hole.yMin),
+                Mathf.Min(panel.xMax, hole.xMax), Mathf.Min(panel.yMax, hole.yMax));
+        }
+
+        private static float HoleCornerRadius(Rect hole, float radius)
+        {
+            return Mathf.Min(Width(radius), Mathf.Min(hole.width, hole.height) * 0.5f);
+        }
+
+        private static int HoleCornerSteps(int detail, bool ellipse)
+        {
+            return ellipse ? (Mathf.Clamp(detail, 4, MaximumEllipseDetail) + 3) / 4
+                : Mathf.Clamp(detail, 1, MaximumCornerDetail);
+        }
+
+        private static Vector2 ArcCenter(Vector2 startNormal, Vector2 endNormal, Vector2 halfSize, float radius)
+        {
+            return Vector2.Scale(startNormal + endNormal, halfSize - Vector2.one * radius);
+        }
+
+        private static Vector2 SampleHole(Vector2 startNormal, Vector2 endNormal, Vector2 halfSize, Vector2 arcCenter,
+            float radius, int steps, int index, bool ellipse)
+        {
+            float angle = Mathf.PI * 0.5f * index / steps;
+            Vector2 normal = index == 0 ? startNormal : index == steps ? endNormal
+                : startNormal * Mathf.Cos(angle) + endNormal * Mathf.Sin(angle);
+            return ellipse ? Vector2.Scale(halfSize, normal) : arcCenter + normal * radius;
+        }
+
         private static Span<Point> BuildHole(Span<Point> storage, Vector2 halfSize, float radius, int steps, bool ellipse)
         {
             int count = 0;
@@ -319,14 +389,11 @@ namespace UnityTools.GraphicPrimitives
                     continue;
                 }
 
-                Vector2 arcCenter = Vector2.Scale(startNormal + endNormal, halfSize - Vector2.one * radius);
+                Vector2 arcCenter = ArcCenter(startNormal, endNormal, halfSize, radius);
                 int last = ellipse ? steps - 1 : steps;
                 for (int i = 0; i <= last; i++)
                 {
-                    float angle = Mathf.PI * 0.5f * i / steps;
-                    Vector2 normal = i == 0 ? startNormal : i == steps ? endNormal
-                        : startNormal * Mathf.Cos(angle) + endNormal * Mathf.Sin(angle);
-                    Vector2 point = ellipse ? Vector2.Scale(halfSize, normal) : arcCenter + normal * radius;
+                    Vector2 point = SampleHole(startNormal, endNormal, halfSize, arcCenter, radius, steps, i, ellipse);
                     AddPoint(storage, ref count, point);
                 }
             }

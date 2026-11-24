@@ -27,10 +27,13 @@ namespace UnityTools.GraphicPrimitives
         [SerializeField] private Gradient _edgeColorGradient = ClosedContour.WhiteGradient();
         [SerializeField, Min(0)] private float _antiAliasingLayerWidth;
         [SerializeField, Min(0)] private float _innerAntiAliasingLayerWidth;
+        [SerializeField, Tooltip("Allow UI behind the cutout to receive pointer events.")]
+        private bool _raycastThroughHole;
 
         internal int VertexCount { get; private set; }
         internal int TriangleCount { get; private set; }
         internal bool MeshBudgetExceeded { get; private set; }
+        internal bool LockHoleAspect => KeepAspect;
 
         private protected abstract bool IsEllipse { get; }
         private protected abstract bool KeepAspect { get; }
@@ -54,6 +57,13 @@ namespace UnityTools.GraphicPrimitives
         {
             get { return _holeSize; }
             set { SetGeometry(ref _holeSize, Clamp01(value)); }
+        }
+
+        /// <summary>Whether pointer raycasts can reach UI behind the cutout.</summary>
+        public bool RaycastThroughHole
+        {
+            get { return _raycastThroughHole; }
+            set { _raycastThroughHole = value; }
         }
 
         public Color EdgeColor
@@ -90,6 +100,24 @@ namespace UnityTools.GraphicPrimitives
             set { SetGeometry(ref _innerAntiAliasingLayerWidth, NonnegativeFinite(value)); }
         }
 
+        public override bool Raycast(Vector2 screenPoint, Camera eventCamera)
+        {
+            if (!base.Raycast(screenPoint, eventCamera))
+            {
+                return false;
+            }
+
+            if (!_raycastThroughHole ||
+                !RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, screenPoint, eventCamera, out var localPoint))
+            {
+                return true;
+            }
+
+            var panel = GetPixelAdjustedRect();
+            var hole = GetHole(panel);
+            return !InverseContour.ContainsHole(panel, hole, IsEllipse, GetCornerRadius(hole), Detail, localPoint);
+        }
+
         protected override void OnPopulateMesh(VertexHelper mesh)
         {
             mesh.Clear();
@@ -116,7 +144,7 @@ namespace UnityTools.GraphicPrimitives
             TriangleCount = mesh.currentIndexCount / 3;
         }
 
-        private Rect GetHole(Rect panel)
+        internal Rect GetHole(Rect panel)
         {
             var size = Vector2.Scale(Clamp01(_holeSize), panel.size);
             if (KeepAspect)
