@@ -48,39 +48,14 @@ namespace UnityTools.GraphicPrimitives
         {
             public readonly Rect EnclosingRect;
             public readonly bool IsAaEnabled;
-            public readonly bool IsEdge;
+            public readonly ContourPaint Fill;
 
-            public HullSettings(Rect enclosingRect, bool isAaEnabled, bool isEdge)
+            public HullSettings(Rect enclosingRect, bool isAaEnabled, ContourPaint fill)
             {
                 EnclosingRect = enclosingRect;
                 IsAaEnabled = isAaEnabled;
-                IsEdge = isEdge;
+                Fill = fill;
             }
-        }
-        
-        private readonly ref struct ColorCalculationData
-        {
-            public readonly Rect EnclosingRect;
-            public readonly Color SingleColor;
-            public readonly Gradient GradientColor;
-            public readonly GradientType GradientType;
-            public readonly bool ShouldUseGradient;
-
-            public ColorCalculationData(Rect enclosingRect, Color singleColor, Gradient gradientColor, GradientType gradientType, bool shouldUseGradient)
-            {
-                EnclosingRect = enclosingRect;
-                SingleColor = singleColor;
-                GradientColor = gradientColor;
-                GradientType = gradientType;
-                ShouldUseGradient = shouldUseGradient;
-            }
-        }
-        
-        private enum GradientType
-        {
-            Horizontal,
-            Vertical,
-            Radial,
         }
         
         [SerializeField, Min(0)]
@@ -96,7 +71,7 @@ namespace UnityTools.GraphicPrimitives
         private bool _shouldUseGradient;
         
         [SerializeField]
-        private GradientType _gradientType;
+        private ContourGradient _gradientType;
         
         [SerializeField]
         private Gradient _gradientColor = ClosedContour.WhiteGradient();
@@ -117,8 +92,13 @@ namespace UnityTools.GraphicPrimitives
         {
             vh.Clear();
 
-            using var selfOwnedBuffer = SpanBufferSharedPool.RentBuffer(6 + _roundingQuality * 3, out SpanBuffer<Vert> buffer);
             var rect = GetPixelAdjustedRect();
+            if (rect.width <= 0f || rect.height <= 0f)
+            {
+                return;
+            }
+
+            using var selfOwnedBuffer = SpanBufferSharedPool.RentBuffer(6 + _roundingQuality * 3, out SpanBuffer<Vert> buffer);
             var sectionsInRounding = _roundingQuality;
             var roundingRadiusX = _roundingRadiusX * rect.width;
             var roundingRadiusY = _roundingRadiusY * rect.height;
@@ -129,13 +109,13 @@ namespace UnityTools.GraphicPrimitives
             var edgeEnabled = sizes.EdgeWidth > 0;
             
             var centerPosition = rect.center;
-            var colorData = new ColorCalculationData(rect, color, _gradientColor, _gradientType, _shouldUseGradient);
+            var fill = new ContourPaint(color, _shouldUseGradient ? _gradientColor : null, _gradientType);
             vh.AddVert(
                 centerPosition,
-                CalculateColor(in centerPosition, in colorData),
+                fill.Sample(centerPosition, rect),
                 CalculateUv(in centerPosition, in rect, default));
             
-            var hullSettings = new HullSettings(rect, aaEnabled, edgeEnabled);
+            var hullSettings = new HullSettings(rect, aaEnabled, fill);
             
             var top = new Vector2(rect.xMin, rect.yMax);
             var bottom = new Vector2(rect.xMin, rect.yMin);
@@ -366,8 +346,7 @@ namespace UnityTools.GraphicPrimitives
         
         private void AddHullVert(in VertexHelper vh, ref Vert vertex, ref SpanBuffer<Vert> verts, in HullSettings settings, in UvRect uvRect)
         {
-            var colorData = new ColorCalculationData(settings.EnclosingRect, color, _gradientColor, _gradientType, _shouldUseGradient);
-            var vertColor = CalculateColor(in vertex.Position, in colorData);
+            var vertColor = settings.Fill.Sample(vertex.Position, settings.EnclosingRect);
             var vertUv = CalculateUv(in vertex.Position, in settings.EnclosingRect, in uvRect);
             
             vertex.Index = (short)vh.currentVertCount;
@@ -384,71 +363,28 @@ namespace UnityTools.GraphicPrimitives
         
         private void AddHullVertWithEdge(in VertexHelper vh, ref Vert vertex, ref SpanBuffer<Vert> verts, in HullSettings settings, in UvRect uvRect)
         {
-            var mainColorData = new ColorCalculationData(settings.EnclosingRect, color, _gradientColor, _gradientType, _shouldUseGradient);
-            var edgeColorData = new ColorCalculationData(settings.EnclosingRect, _edgeColor, _gradientColor, _gradientType, _shouldUseGradient);
-
             vertex.Index = (short)vh.currentVertCount;
-            vh.AddVert(vertex.Position, CalculateColor(in vertex.Position, mainColorData), CalculateUv(in vertex.Position, in settings.EnclosingRect, in uvRect));
+            vh.AddVert(vertex.Position, settings.Fill.Sample(vertex.Position, settings.EnclosingRect),
+                CalculateUv(in vertex.Position, in settings.EnclosingRect, in uvRect));
             
             vertex.AaEdgeIndex = (short)vh.currentVertCount;
-            vh.AddVert(vertex.AaEdgePosition, CalculateColor(in vertex.AaEdgePosition, edgeColorData), CalculateUv(in vertex.AaEdgePosition, in settings.EnclosingRect, in uvRect));
+            vh.AddVert(vertex.AaEdgePosition, _edgeColor, CalculateUv(in vertex.AaEdgePosition, in settings.EnclosingRect, in uvRect));
             
             vertex.EdgeIndex = (short)vh.currentVertCount;
-            vh.AddVert(vertex.EdgePosition, CalculateColor(in vertex.EdgePosition, edgeColorData), CalculateUv(in vertex.EdgePosition, in settings.EnclosingRect, in uvRect));
+            vh.AddVert(vertex.EdgePosition, _edgeColor, CalculateUv(in vertex.EdgePosition, in settings.EnclosingRect, in uvRect));
             
             if (settings.IsAaEnabled)
             {
                 vertex.AaIndex = (short)vh.currentVertCount;
                 vh.AddVert(
                     vertex.AaPosition,
-                    CalculateColor(in vertex.AaPosition, edgeColorData).WithAlpha(0.0f),
+                    _edgeColor.WithAlpha(0f),
                     CalculateUv(in vertex.AaPosition, in settings.EnclosingRect, in uvRect));
             }
             
             verts.Add(vertex);
         }
         
-        private static Color32 CalculateColor(in Vector2 vertexPosition, in ColorCalculationData colorData)
-        {
-            if (!colorData.ShouldUseGradient)
-            {
-                return colorData.SingleColor;
-            }
-
-            var rect = colorData.EnclosingRect;
-            
-            switch (colorData.GradientType)
-            {
-                case GradientType.Horizontal:
-                {
-                    var t = (vertexPosition.x - rect.xMin) / rect.width;
-                    return colorData.GradientColor.Evaluate(t);
-                }
-                case GradientType.Vertical:
-                {
-                    var t = (vertexPosition.y - rect.yMin) / rect.height;
-                    return colorData.GradientColor.Evaluate(t);
-                }
-                case GradientType.Radial:
-                {
-                    var halfWidth = rect.width / 2;
-                    var centerPosition = new Vector2(rect.xMin + halfWidth, rect.yMax);
-                    
-                    if (vertexPosition == centerPosition)
-                    {
-                        return colorData.GradientColor.Evaluate(0.0f);
-                    }
-                    else
-                    {
-                        return colorData.GradientColor.Evaluate(1.0f);
-                    }
-                }
-
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(colorData.GradientType), colorData.GradientType, "Unknown gradient type used.");
-            }
-        }
-
         private Vector4 CalculateUv(in Vector2 vertexPosition, in Rect enclosingRect, in UvRect spriteUvs)
         {
             var u = (vertexPosition.x - enclosingRect.xMin) / enclosingRect.width;
