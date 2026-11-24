@@ -30,6 +30,11 @@
 			"displayName": "Structured Process Tests",
 			"description": "Independent Edit Mode tests for generated processes. Requires com.unity.test-framework.",
 			"path": "Samples~/StructuredProcessTests"
+		},
+		{
+			"displayName": "Graphic Primitives",
+			"description": "An interactive uGUI scene for exploring the procedural graphics and their inspectors.",
+			"path": "Samples~/GraphicPrimitives"
 		}
 	]
 }

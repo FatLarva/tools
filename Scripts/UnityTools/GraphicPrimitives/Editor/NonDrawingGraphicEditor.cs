@@ -6,27 +6,19 @@
 /// @intended project path: Assets/Plugins/UnityEngine UI Extensions/NonDrawingGraphic.cs
 /// @interwebsouce: https://gist.github.com/capnslipp/349c18283f2fea316369
 
-using System;
 using UnityEditor;
-using UnityEditor.UI;
-using UnityEngine;
 using UnityTools.GraphicPrimitives;
 
-//Don't forget to put this file inside a 'Editor' folder
 namespace Tools.EditorOnly.GraphicPrimitives
 {
-	[CanEditMultipleObjects, CustomEditor(typeof(NonDrawingGraphic), false)]
-	public class NonDrawingGraphicEditor : GraphicEditor
-	{
-		public override void OnInspectorGUI()
-		{
-			base.serializedObject.Update();
-			EditorGUI.BeginDisabledGroup(true);
-			EditorGUILayout.PropertyField(base.m_Script, Array.Empty<GUILayoutOption>());
-			EditorGUI.EndDisabledGroup();
-			// skipping AppearanceControlsGUI
-			base.RaycastControlsGUI();
-			base.serializedObject.ApplyModifiedProperties();
-		}
-	}
+    [CustomEditor(typeof(NonDrawingGraphic)), CanEditMultipleObjects]
+    public class NonDrawingGraphicEditor : Editor
+    {
+        public override void OnInspectorGUI()
+        {
+            serializedObject.Update();
+            PrimitiveInspector.DrawInput(serializedObject);
+            serializedObject.ApplyModifiedProperties();
+        }
+    }
 }

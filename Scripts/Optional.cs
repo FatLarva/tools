@@ -1,11 +1,13 @@
 using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace Tools
 {
     [Serializable]
     public struct Optional<T>
     {
+        [FormerlySerializedAs("HasValue")]
         [SerializeField] private bool _hasValue;
         [SerializeField] private T _value;
 

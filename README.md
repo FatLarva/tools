@@ -50,3 +50,5 @@ Import samples from **Tools > Samples** in the Package Manager.
 | State Machine Tests and Structured Process Tests | Install Unity Test Framework, then run the imported tests in the **EditMode** tab of Test Runner. |
 
 Version 1.2.0 also fixes a race in `AtomicBool.TryFlip`. It now reports success only when its compare-and-exchange changes the flag. `FlipBool.TrySet` provides conditional assignment for single-threaded code.
+
+Import [**Graphic Primitives**](Samples~/GraphicPrimitives/README.md) from Package Manager to explore the shape examples in an interactive uGUI scene.

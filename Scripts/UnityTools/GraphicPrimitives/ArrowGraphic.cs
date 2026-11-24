@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using Tools;
 using Tools.Collections.Spans;
 using UnityEngine;
 using UnityEngine.UI;
@@ -7,8 +9,26 @@ namespace UnityTools.GraphicPrimitives
 {
     [RequireComponent(typeof(CanvasRenderer))]
     [AddComponentMenu("UI/Arrow Graphic", 12)]
-    public class ArrowGraphic : MaskableGraphic
+    public class ArrowGraphic : PrimitiveGraphic
     {
+        private const float PathEpsilon = 0.0001f;
+        private const float CurveTolerance = 0.2f;
+        internal const int MaximumPathPoints = 4096;
+        private const int MaximumCurveDepth = 10;
+        private const float MiterLimit = 4f;
+
+        internal readonly struct PathPoint
+        {
+            public readonly Vector2 Position;
+            public readonly float Distance;
+
+            public PathPoint(Vector2 position, float distance)
+            {
+                Position = position;
+                Distance = distance;
+            }
+        }
+
         internal struct LineVert
         {
             public Vector2 Position;
@@ -16,11 +36,11 @@ namespace UnityTools.GraphicPrimitives
             public Vector2 LeftPositionAa;
             public Vector2 RightPosition;
             public Vector2 RightPositionAa;
-            public short Index;
-            public short LeftIndex;
-            public short LeftIndexAa;
-            public short RightIndex;
-            public short RightIndexAa;
+            public int Index;
+            public int LeftIndex;
+            public int LeftIndexAa;
+            public int RightIndex;
+            public int RightIndexAa;
         }
         
         internal struct CornerVert
@@ -29,33 +49,31 @@ namespace UnityTools.GraphicPrimitives
             public Vector2 PositionAa0;
             public Vector2 PositionAa1;
             public Vector2 PositionAa2;
-            public short Index;
-            public short IndexAa0;
-            public short IndexAa1;
-            public short IndexAa2;
+            public int Index;
+            public int IndexAa0;
+            public int IndexAa1;
+            public int IndexAa2;
         }
         
         internal struct Vert
         {
             public Vector2 Position;
             public Vector2 PositionAa;
-            public short Index;
-            public short IndexAa;
+            public int Index;
+            public int IndexAa;
         }
         
         internal readonly ref struct HullSettings
         {
-            public readonly bool IsDashed;
             public readonly Rect EnclosingRect;
             public readonly bool IsAaEnabled;
             public readonly bool IsRounded;
 
-            public HullSettings(Rect enclosingRect, bool isAaEnabled, bool isRounded, bool isDashed)
+            public HullSettings(Rect enclosingRect, bool isAaEnabled, bool isRounded)
             {
                 EnclosingRect = enclosingRect;
                 IsAaEnabled = isAaEnabled;
                 IsRounded = isRounded;
-                IsDashed = isDashed;
             }
         }
 
@@ -81,20 +99,6 @@ namespace UnityTools.GraphicPrimitives
             public float AngleRadians => Angle * Mathf.Deg2Rad;
         }
         
-        internal readonly struct EndingsOffsets
-        {
-            public readonly float StartEndingOffset;
-            public readonly float EndEndingOffset;
-
-            public float TotalOffset => StartEndingOffset + EndEndingOffset;
-            
-            public EndingsOffsets(float startEndingOffset, float endEndingOffset)
-            {
-                StartEndingOffset = startEndingOffset;
-                EndEndingOffset = endEndingOffset;
-            }
-        }
-
         [Serializable]
         internal struct DashesConfiguration
         {
@@ -111,8 +115,9 @@ namespace UnityTools.GraphicPrimitives
         internal struct LineKnot
         {
             public Vector2 Position;
-            public MaybeVector2 PrevTangentPoint;
-            public MaybeVector2 NextTangentPoint;
+            public Optional<Vector2> PrevTangentPoint;
+            public Optional<Vector2> NextTangentPoint;
+            public BezierTangentMode Mode;
         }
         
         [Serializable]
@@ -157,10 +162,6 @@ namespace UnityTools.GraphicPrimitives
 
             public EndingSettings StartEnding;
             public EndingSettings EndEnding;
-
-            public int PointsNumber => SegmentsNumber + 1;
-            public float HalfThickness => Thickness / 2.0f;
-            public float HalfThicknessAa => HalfThickness + AntiAliasingLayerWidth;
         }
 
         [SerializeField]
@@ -172,89 +173,344 @@ namespace UnityTools.GraphicPrimitives
         [SerializeField, HideInInspector]
         private Rect _lastUsedRect;
 
-        internal ref Settings SettingsAccess => ref _settings;
-        internal ref MeshDebugInfo MeshInfoAccess => ref _meshInfo;
-        
+        private readonly List<PathPoint> _path = new();
+        private Vector2 _startDirection;
+        private Vector2 _endDirection;
+
+        internal MeshDebugInfo MeshInfoAccess => _meshInfo;
+
+        public float StrokeThickness
+        {
+            get { return _settings.Thickness; }
+            set
+            {
+                var thickness = float.IsFinite(value) ? Mathf.Max(0f, value) : 0f;
+                if (_settings.Thickness != thickness)
+                {
+                    _settings.Thickness = thickness;
+                    SetVerticesDirty();
+                }
+            }
+        }
+
         protected override void OnPopulateMesh(VertexHelper vh)
         {
             vh.Clear();
+            _meshInfo.Set(0, 0);
+            RebuildPath();
 
-            ref var settings = ref _settings;
-
-            if (!settings.KnotsConfig.IsEligible)
+            if (_path.Count < 2 || !float.IsFinite(_settings.Thickness) || _settings.Thickness <= 0f)
             {
                 return;
             }
-            
+
             var rect = GetPixelAdjustedRect();
-            AdjustPointsToNewDimensions(rect, ref _lastUsedRect, ref settings);
-            
-            var aaEnabled = settings.AntiAliasingLayerWidth > 0;
-            var hullSettings = new HullSettings(rect, aaEnabled, settings.IsRounded, settings.DashConfig.DashesEnabled);
-            var knotsCount = settings.KnotsConfig.Knots.Length;
-            
-            using var selfOwnedBuffer = SpanBufferSharedPool.RentBuffer(settings.PointsNumber * (knotsCount - 1), out SpanBuffer<LineVert> buffer);
-            FillInVerts(in settings, in hullSettings, in vh, default, ref buffer);
+            var aa = float.IsFinite(_settings.AntiAliasingLayerWidth)
+                ? Mathf.Clamp(_settings.AntiAliasingLayerWidth, 0f, 100f)
+                : 0f;
+            var thickness = _settings.Thickness;
+            var startEnding = NormalizeEnding(_settings.StartEnding);
+            var endEnding = NormalizeEnding(_settings.EndEnding);
+            var isDashed = _settings.DashConfig.DashesEnabled;
+            var hull = new HullSettings(rect, aa > 0f, _settings.IsRounded);
+            var pathEnd = _path[^1].Distance;
 
-            var filledVerts = buffer.FilledBufferSlice();
-
-            if (!settings.IsEndingsOnly)
+            if (!_settings.IsEndingsOnly)
             {
-                if (settings.DashConfig.DashesEnabled)
+                var shaftStart = CalculateEndingOffset(in startEnding, thickness);
+                var shaftEnd = pathEnd - CalculateEndingOffset(in endEnding, thickness);
+                if (shaftEnd - shaftStart > PathEpsilon)
                 {
-                    DrawDashedLineTriangles(vh, filledVerts, settings.DashConfig, hullSettings);
-                }
-                else
-                {
-                    DrawNotDashedLineTriangles(vh, filledVerts, in hullSettings);
+                    if (isDashed)
+                    {
+                        if (!DrawDashedStroke(vh, in hull, shaftStart, shaftEnd, thickness, aa, startEnding.HasEnding, endEnding.HasEnding))
+                        {
+                            vh.Clear();
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        DrawStroke(vh, in hull, shaftStart, shaftEnd, thickness, aa, !startEnding.HasEnding, !endEnding.HasEnding);
+                    }
                 }
             }
 
-            DrawBothEndings(vh, settings, filledVerts, hullSettings);
-            
+            // The ends belong to the entire path, regardless of where the shaft or dashes stop.
+            if (startEnding.HasEnding)
+            {
+                var start = _path[0].Position;
+                var direction = -_startDirection;
+                DrawEnding(in start, in direction, in startEnding, hull, aa, thickness, in vh);
+            }
+
+            if (endEnding.HasEnding)
+            {
+                var end = _path[^1].Position;
+                var direction = _endDirection;
+                DrawEnding(in end, in direction, in endEnding, hull, aa, thickness, in vh);
+            }
+
             _meshInfo.Set(vh.currentVertCount, vh.currentIndexCount / 3);
         }
 
-        private void AdjustPointsToNewDimensions(Rect newRect, ref Rect lastUsedRect, ref Settings settings)
+        internal IReadOnlyList<PathPoint> GetPathPreview()
         {
-            if (lastUsedRect == Rect.zero)
+            RebuildPath();
+            return _path;
+        }
+
+        internal Rect GetPathRect()
+        {
+            return GetPixelAdjustedRect();
+        }
+
+        internal Vector2 ToLocalPathPoint(Vector2 position, Rect rect)
+        {
+            return ConvertPathPoint(position, _lastUsedRect, rect, false);
+        }
+
+        internal Vector2 ToAuthoredPathPoint(Vector2 position, Rect rect)
+        {
+            return ConvertPathPoint(position, _lastUsedRect, rect, true);
+        }
+
+        private static Vector2 ConvertPathPoint(Vector2 position, Rect authoredRect, Rect currentRect, bool toAuthored)
+        {
+            if (!IsUsableRect(authoredRect) || !IsUsableRect(currentRect))
             {
-                lastUsedRect = newRect;
+                return position;
+            }
+
+            // Existing assets store the rect that their serialized local points belong to.
+            // Sample against that stable reference instead of rescaling authored points after each resize.
+            var scale = toAuthored
+                ? new Vector2(authoredRect.width / currentRect.width, authoredRect.height / currentRect.height)
+                : new Vector2(currentRect.width / authoredRect.width, currentRect.height / authoredRect.height);
+            return Vector2.Scale(position, scale);
+        }
+
+        internal static bool IsUsableRect(Rect rect)
+        {
+            return float.IsFinite(rect.width) && float.IsFinite(rect.height) && rect.width > PathEpsilon && rect.height > PathEpsilon;
+        }
+
+        internal static CubicBezierSegment GetAuthoredCurve(in LineKnot first, in LineKnot second)
+        {
+            var from = first.Position;
+            var to = second.Position;
+            var outgoing = first.NextTangentPoint.GetValueOrDefault(Vector2.LerpUnclamped(from, to, 1f / 3f));
+            var incoming = second.PrevTangentPoint.GetValueOrDefault(Vector2.LerpUnclamped(from, to, 2f / 3f));
+            return new CubicBezierSegment(from, outgoing, incoming, to);
+        }
+
+        private void RebuildPath()
+        {
+            _path.Clear();
+            _startDirection = Vector2.zero;
+            _endDirection = Vector2.zero;
+            var knotsConfig = _settings.KnotsConfig;
+            if (!knotsConfig.IsEligible || knotsConfig.Knots.Length > MaximumPathPoints)
+            {
                 return;
             }
 
-            if (lastUsedRect == newRect)
+            var rect = GetPathRect();
+            if (!IsUsableRect(rect))
             {
                 return;
             }
 
-            ref var knots = ref settings.KnotsConfig.Knots;
-            for (int i = 0; i < knots.Length; i++)
+            var knots = knotsConfig.Knots;
+            if (!TryAppendPathPoint(ToLocalPathPoint(knots[0].Position, rect)))
             {
-                ref var knot = ref knots[i];
-                knot.Position = AdjustPoint(knot.Position, lastUsedRect, newRect);
-                if (knot.NextTangentPoint.HasValue)
+                return;
+            }
+
+            var detail = Mathf.Clamp(_settings.SegmentsNumber, 1, 1000);
+            var minimumDepth = 0;
+            while ((1 << minimumDepth) < detail)
+            {
+                minimumDepth++;
+            }
+
+            for (var i = 1; i < knots.Length; i++)
+            {
+                var previousCount = _path.Count;
+                if (knotsConfig.UseSpline)
                 {
-                    knot.NextTangentPoint = AdjustPoint(knot.NextTangentPoint.SureValue, lastUsedRect, newRect);
+                    var authored = GetAuthoredCurve(in knots[i - 1], in knots[i]);
+                    var curve = new CubicBezierSegment(
+                        ToLocalPathPoint(authored.Start, rect),
+                        ToLocalPathPoint(authored.Outgoing, rect),
+                        ToLocalPathPoint(authored.Incoming, rect),
+                        ToLocalPathPoint(authored.End, rect));
+                    if (!IsFinite(curve.Start) || !IsFinite(curve.Outgoing) || !IsFinite(curve.Incoming) || !IsFinite(curve.End) ||
+                        !TryAppendCubic(in curve, 0, minimumDepth))
+                    {
+                        _path.Clear();
+                        return;
+                    }
+
+                    if (_path.Count > previousCount)
+                    {
+                        var start = ResolveDirection(curve.Outgoing - curve.Start, curve.Incoming - curve.Start, curve.End - curve.Start);
+                        var end = ResolveDirection(curve.End - curve.Incoming, curve.End - curve.Outgoing, curve.End - curve.Start);
+                        SetPathDirections(start, end);
+                    }
                 }
-                
-                if (knot.PrevTangentPoint.HasValue)
+                else
                 {
-                    knot.PrevTangentPoint = AdjustPoint(knot.PrevTangentPoint.SureValue, lastUsedRect, newRect);
+                    if (!TryAppendPathPoint(ToLocalPathPoint(knots[i].Position, rect)))
+                    {
+                        _path.Clear();
+                        return;
+                    }
+
+                    if (_path.Count > previousCount)
+                    {
+                        var direction = (_path[^1].Position - _path[^2].Position).normalized;
+                        SetPathDirections(direction, direction);
+                    }
+                }
+            }
+        }
+
+        private void SetPathDirections(Vector2 start, Vector2 end)
+        {
+            if (_startDirection == Vector2.zero)
+            {
+                _startDirection = start;
+            }
+
+            _endDirection = end;
+        }
+
+        private static Vector2 ResolveDirection(Vector2 direction, Vector2 firstFallback, Vector2 secondFallback)
+        {
+            const float minimumDistanceSquared = PathEpsilon * PathEpsilon;
+            if (direction.sqrMagnitude <= minimumDistanceSquared)
+            {
+                direction = firstFallback.sqrMagnitude > minimumDistanceSquared ? firstFallback : secondFallback;
+            }
+
+            return direction.normalized;
+        }
+
+        private bool TryAppendCubic(in CubicBezierSegment curve, int depth, int minimumDepth)
+        {
+            if (depth >= MaximumCurveDepth || (depth >= minimumDepth && IsFlatEnough(in curve)))
+            {
+                return TryAppendPathPoint(curve.End);
+            }
+
+            curve.Split(0.5f, out var first, out var second);
+            return TryAppendCubic(in first, depth + 1, minimumDepth) &&
+                TryAppendCubic(in second, depth + 1, minimumDepth);
+        }
+
+        private static bool IsFlatEnough(in CubicBezierSegment curve)
+        {
+            var chord = curve.End - curve.Start;
+            var chordLength = chord.magnitude;
+            var controlLength = Vector2.Distance(curve.Start, curve.Outgoing)
+                + Vector2.Distance(curve.Outgoing, curve.Incoming)
+                + Vector2.Distance(curve.Incoming, curve.End);
+            if (controlLength - chordLength > CurveTolerance)
+            {
+                return false;
+            }
+
+            if (chordLength <= PathEpsilon)
+            {
+                return true;
+            }
+
+            var normal = Vector2.Perpendicular(chord / chordLength);
+            return Mathf.Abs(Vector2.Dot(curve.Outgoing - curve.Start, normal)) <= CurveTolerance &&
+                Mathf.Abs(Vector2.Dot(curve.Incoming - curve.Start, normal)) <= CurveTolerance;
+        }
+
+        private bool TryAppendPathPoint(Vector2 position)
+        {
+            if (!IsFinite(position))
+            {
+                return false;
+            }
+
+            if (_path.Count == 0)
+            {
+                _path.Add(new PathPoint(position, 0f));
+                return true;
+            }
+
+            var previous = _path[^1];
+            var length = Vector2.Distance(previous.Position, position);
+            var distance = previous.Distance + length;
+            if (!float.IsFinite(distance))
+            {
+                return false;
+            }
+
+            if (length <= PathEpsilon || distance <= previous.Distance)
+            {
+                return true;
+            }
+
+            if (_path.Count >= MaximumPathPoints)
+            {
+                return false;
+            }
+
+            _path.Add(new PathPoint(position, distance));
+            return true;
+        }
+
+        internal static bool IsFinite(Vector2 value)
+        {
+            return float.IsFinite(value.x) && float.IsFinite(value.y);
+        }
+
+        private int FindPathEndIndex(float distance)
+        {
+            var low = 1;
+            var high = _path.Count - 1;
+            while (low < high)
+            {
+                var mid = low + (high - low) / 2;
+                if (_path[mid].Distance < distance)
+                {
+                    low = mid + 1;
+                }
+                else
+                {
+                    high = mid;
                 }
             }
 
-            lastUsedRect = newRect;
-            
-            return;
+            return low;
+        }
 
-            static Vector2 AdjustPoint(in Vector2 point, in Rect oldRect, in Rect newRect)
+        private Vector2 GetPointAtDistance(float distance, int endIndex)
+        {
+            var start = _path[endIndex - 1];
+            var end = _path[endIndex];
+            var t = (distance - start.Distance) / (end.Distance - start.Distance);
+            return Vector2.LerpUnclamped(start.Position, end.Position, t);
+        }
+
+        private static EndingSettings NormalizeEnding(EndingSettings settings)
+        {
+            if ((settings.Type != EndingType.Arrow && settings.Type != EndingType.FilledArrow) ||
+                !float.IsFinite(settings.Length) || settings.Length <= 0f)
             {
-                var relativeCoords = new Vector2(point.x / oldRect.width, point.y / oldRect.height);
-                var newCoords = new Vector2(relativeCoords.x * newRect.width, relativeCoords.y * newRect.height);
-
-                return newCoords;
+                settings.Type = EndingType.None;
             }
+
+            settings.Length = Mathf.Clamp(settings.Length, 0f, 100f);
+            settings.Angle = Mathf.Clamp(settings.Angle, 1, 179);
+            settings.RoundedArrowSmoothness = Mathf.Clamp(settings.RoundedArrowSmoothness, 1, 100);
+            return settings;
         }
 
 #if UNITY_EDITOR
@@ -262,6 +518,7 @@ namespace UnityTools.GraphicPrimitives
         {
             base.Reset();
 
+            _lastUsedRect = GetPathRect();
             _settings = new Settings
             {
                 AntiAliasingLayerWidth = 0.0f,
@@ -308,91 +565,183 @@ namespace UnityTools.GraphicPrimitives
         }
 #endif // UNITY_EDITOR
 
-        private void DrawDashedLineTriangles(
-            VertexHelper vh,
-            Span<LineVert> filledVerts,
-            in DashesConfiguration dashConfig,
-            in HullSettings hullSettings)
+        private bool DrawDashedStroke(
+            VertexHelper vh, in HullSettings hull, float start, float end, float thickness, float aa,
+            bool hasStartEnding, bool hasEndEnding)
         {
-            var period = dashConfig.DashLengthInSegments + dashConfig.GapLengthInSegments;
-            for (int i = 1; i < filledVerts.Length; i++)
+            var dash = _settings.DashConfig;
+            var dashLength = Math.Max(1L, dash.DashLengthInSegments);
+            var gapLength = Math.Max(1L, dash.GapLengthInSegments);
+            var period = dashLength + gapLength;
+            var segmentsPerSpan = Mathf.Clamp(_settings.SegmentsNumber, 1, 1000);
+            var slots = (long)segmentsPerSpan * (_settings.KnotsConfig.Knots.Length - 1);
+            var runCount = (slots + period - 1) / period + 1;
+
+            // A joint can require two cross-sections. A span adds two cross-sections and two caps.
+            // The remaining allowance covers both arrowheads at their highest supported quality.
+            const int maximumEndingVertices = 560;
+            var verticesPerSection = hull.IsAaEnabled ? 5 : 3;
+            var verticesPerCap = hull.IsRounded ? (hull.IsAaEnabled ? 18 : 9) : (hull.IsAaEnabled ? 2 : 0);
+            var requiredVertices = maximumEndingVertices + _path.Count * 2L * verticesPerSection
+                + runCount * 2L * (verticesPerSection + verticesPerCap);
+            if (requiredVertices >= GraphicMesh.MaximumVertices)
             {
-                var offsettedI = i - dashConfig.OffsetInSegments - 1;
-                if (offsettedI < 0)
-                {
-                    offsettedI = (offsettedI % period) + period;
-                }
-                
-                var reminder = offsettedI % period;
-                if (reminder >= dashConfig.DashLengthInSegments)
+                return false;
+            }
+
+            // Serialized dash lengths still count segments; each segment now advances the same
+            // distance along the entire shaft, including when crossing a Bézier span boundary.
+            var phase = -(long)dash.OffsetInSegments % period;
+            if (phase < 0)
+            {
+                phase += period;
+            }
+
+            for (var run = -phase; run < slots; run += period)
+            {
+                var firstSlot = Math.Max(0L, run);
+                var lastSlot = Math.Min(slots, run + dashLength);
+                if (firstSlot >= lastSlot)
                 {
                     continue;
                 }
-                
-                (LineVert vert, LineVert prevVert) = filledVerts.GetCircularConsecutivePair(i);
 
-                vh.AddTriangle(vert.LeftIndex, vert.RightIndex, prevVert.LeftIndex);
-                vh.AddTriangle(vert.RightIndex, prevVert.RightIndex, prevVert.LeftIndex);
-
-                if (hullSettings.IsAaEnabled)
+                var from = Mathf.LerpUnclamped(start, end, firstSlot / (float)slots);
+                var to = Mathf.LerpUnclamped(start, end, lastSlot / (float)slots);
+                if (to - from > PathEpsilon)
                 {
-                    vh.AddTriangle(vert.LeftIndex, vert.LeftIndexAa, prevVert.LeftIndex);
-                    vh.AddTriangle(prevVert.LeftIndex, prevVert.LeftIndexAa, vert.LeftIndexAa);
-
-                    vh.AddTriangle(vert.RightIndex, vert.RightIndexAa, prevVert.RightIndex);
-                    vh.AddTriangle(prevVert.RightIndex, prevVert.RightIndexAa, vert.RightIndexAa);
+                    DrawStroke(vh, in hull, from, to, thickness, aa,
+                        firstSlot > 0 || !hasStartEnding, lastSlot < slots || !hasEndEnding);
                 }
+            }
 
-                if (hullSettings.IsRounded)
+            return true;
+        }
+
+        private void DrawStroke(
+            VertexHelper vh, in HullSettings hull, float start, float end, float thickness, float aa,
+            bool capStart, bool capEnd)
+        {
+            var firstInterval = FindPathEndIndex(start);
+            var lastInterval = FindPathEndIndex(end);
+            var from = GetPointAtDistance(start, firstInterval);
+            var to = GetPointAtDistance(end, lastInterval);
+            if (firstInterval + 1 < _path.Count && _path[firstInterval].Distance == start)
+            {
+                firstInterval++;
+            }
+
+            var halfThickness = thickness * 0.5f;
+            var halfThicknessAa = halfThickness + aa;
+            var firstDirection = (_path[firstInterval].Position - _path[firstInterval - 1].Position).normalized;
+            var first = CreateLineVert(from, firstDirection, halfThickness, halfThicknessAa);
+            WriteLineVert(in vh, ref first, in hull, default, color);
+            var previous = first;
+
+            for (var i = firstInterval; i < lastInterval; i++)
+            {
+                var point = _path[i].Position;
+                var before = (point - _path[i - 1].Position).normalized;
+                var after = (_path[i + 1].Position - point).normalized;
+                var miter = Vector2.Perpendicular((before + after).normalized);
+                var projection = Vector2.Dot(miter, Vector2.Perpendicular(after));
+                if (projection >= 1f / MiterLimit)
                 {
-                    var isDashStart = reminder - 1 < 0;
-                    var isDashEnd = reminder + 1 >= dashConfig.DashLengthInSegments;
-
-                    if (isDashStart)
-                    {
-                        DrawRoundCap(in prevVert, true, in vh, in hullSettings, default, color);
-                    }
-
-                    if (isDashEnd)
-                    {
-                        DrawRoundCap(in vert, false, in vh, in hullSettings, default, color);
-                    }
+                    var next = CreateLineVertFromNormal(point, miter / projection, halfThickness, halfThicknessAa);
+                    AddStrokeSection(vh, in hull, ref previous, ref next);
                 }
+                else
+                {
+                    AddBeveledJoin(vh, in hull, ref previous, point, before, after, halfThickness, halfThicknessAa);
+                }
+            }
+
+            var lastDirection = (_path[lastInterval].Position - _path[lastInterval - 1].Position).normalized;
+            var last = CreateLineVert(to, lastDirection, halfThickness, halfThicknessAa);
+            AddStrokeSection(vh, in hull, ref previous, ref last);
+
+            if (capStart)
+            {
+                DrawStrokeCap(vh, in hull, in first, true, aa, firstDirection);
+            }
+
+            if (capEnd)
+            {
+                DrawStrokeCap(vh, in hull, in last, false, aa, lastDirection);
             }
         }
 
-        private static void DrawNotDashedLineTriangles(in VertexHelper vh, in Span<LineVert> lineVertices, in HullSettings hullSettings)
+        private void AddBeveledJoin(
+            VertexHelper vh, in HullSettings hull, ref LineVert previous, Vector2 point,
+            Vector2 before, Vector2 after, float halfThickness, float halfThicknessAa)
         {
-            DrawLineVertTriangles(vh, lineVertices, hullSettings);
+            var incoming = CreateLineVert(point, before, halfThickness, halfThicknessAa);
+            var outgoing = CreateLineVert(point, after, halfThickness, halfThicknessAa);
+            var turn = before.x * after.y - before.y * after.x;
+            if (Mathf.Abs(turn) <= PathEpsilon)
+            {
+                // A reversing path has no well-defined intersection at the turn.
+                AddStrokeSection(vh, in hull, ref previous, ref incoming);
+                WriteLineVert(in vh, ref outgoing, in hull, default, color);
+                previous = outgoing;
+                return;
+            }
+
+            if (turn > 0f)
+            {
+                incoming.LeftPosition = outgoing.LeftPosition = point;
+                incoming.LeftPositionAa = outgoing.LeftPositionAa = point;
+            }
+            else
+            {
+                incoming.RightPosition = outgoing.RightPosition = point;
+                incoming.RightPositionAa = outgoing.RightPositionAa = point;
+            }
+
+            AddStrokeSection(vh, in hull, ref previous, ref incoming);
+            AddStrokeSection(vh, in hull, ref previous, ref outgoing);
         }
 
-        private void DrawBothEndings(in VertexHelper vh, in Settings settings, in Span<LineVert> lineVertices, in HullSettings hullSettings)
+        private void AddStrokeSection(VertexHelper vh, in HullSettings hull, ref LineVert previous, ref LineVert next)
         {
-            var knotsConfig = settings.KnotsConfig;
-            var startPoint = knotsConfig.Knots[0].Position;
-            var endPoint = knotsConfig.Knots[^1].Position;
+            WriteLineVert(in vh, ref next, in hull, default, color);
+            ConnectLineVerts(in vh, in hull, in previous, in next);
+            previous = next;
+        }
 
-            var startDirection = GetDirection(startPoint, lineVertices[1].Position, lineVertices[0].Position);
-            var endDirection = GetDirection(endPoint, lineVertices[^1].Position, lineVertices[^2].Position);
-
-            if (settings.StartEnding.HasEnding)
+        private void DrawStrokeCap(
+            VertexHelper vh, in HullSettings hull, in LineVert section, bool atStart, float aa, Vector2 direction)
+        {
+            if (hull.IsRounded)
             {
-                DrawEnding(in startPoint, in startDirection, in settings.StartEnding, hullSettings, settings.AntiAliasingLayerWidth, settings.Thickness, in vh);
-            }
-            else if (!settings.IsEndingsOnly && hullSettings.IsRounded && !hullSettings.IsDashed)
-            {
-                var startVert = lineVertices[0];
-                DrawRoundCap(in startVert, true, in vh, in hullSettings, default, color);
+                DrawRoundCap(in section, atStart, in vh, in hull, default, color);
+                return;
             }
 
-            if (settings.EndEnding.HasEnding)
+            if (!hull.IsAaEnabled)
             {
-                DrawEnding(in endPoint, in endDirection, in settings.EndEnding, hullSettings, settings.AntiAliasingLayerWidth, settings.Thickness, in vh);
+                return;
             }
-            else if (!settings.IsEndingsOnly && hullSettings.IsRounded && !hullSettings.IsDashed)
+
+            var extension = direction * (atStart ? -aa : aa);
+            var transparent = color.WithAlpha(0f);
+            var left = section.LeftPosition + extension;
+            var right = section.RightPosition + extension;
+            var leftIndex = AddSimplePoint(in vh, in left, in hull, default, in transparent);
+            var rightIndex = AddSimplePoint(in vh, in right, in hull, default, in transparent);
+            if (atStart)
             {
-                var endVert = lineVertices[^1];
-                DrawRoundCap(in endVert, false, in vh, in hullSettings, default, color);
+                vh.AddTriangle(section.LeftIndex, section.RightIndex, leftIndex);
+                vh.AddTriangle(section.RightIndex, rightIndex, leftIndex);
+                vh.AddTriangle(section.LeftIndex, leftIndex, section.LeftIndexAa);
+                vh.AddTriangle(section.RightIndex, section.RightIndexAa, rightIndex);
+            }
+            else
+            {
+                vh.AddTriangle(leftIndex, rightIndex, section.LeftIndex);
+                vh.AddTriangle(rightIndex, section.RightIndex, section.LeftIndex);
+                vh.AddTriangle(section.LeftIndex, section.LeftIndexAa, leftIndex);
+                vh.AddTriangle(section.RightIndex, rightIndex, section.RightIndexAa);
             }
         }
 
@@ -404,15 +753,17 @@ namespace UnityTools.GraphicPrimitives
                 case EndingType.None:
                     return 0;
                 case EndingType.Arrow:
-                    var halfThickness = thickness / 2.0f;
-                    var angleRad = (90 - settings.Angle / 2.0f) * Mathf.Deg2Rad;
-                    var cos = Mathf.Cos(angleRad);
-                    return halfThickness / cos;
+                    return CalculateHollowTipOffset(settings, thickness * 0.5f);
                 case EndingType.FilledArrow:
                     return length * Mathf.Cos(settings.AngleRadians / 2.0f);
                 default:
                     throw new ArgumentOutOfRangeException(nameof(EndingType), settings.Type, "Unexpected ending type.");
             }
+        }
+
+        private static float CalculateHollowTipOffset(in EndingSettings ending, float halfThickness)
+        {
+            return halfThickness / Mathf.Max(1f / MiterLimit, Mathf.Sin(ending.AngleRadians * 0.5f));
         }
 
         private void DrawEnding(
@@ -517,10 +868,8 @@ namespace UnityTools.GraphicPrimitives
             var leftVert = CreateLineVert(leftPoint, -leftHandDirection, halfThickness, halfThicknessAa);
             var rightVert = CreateLineVert(rightPoint, rightHandDirection, halfThickness, halfThicknessAa);
 
-            var angleRad = (90 - endingSettings.Angle / 2.0f) * Mathf.Deg2Rad;
-            var cos = Mathf.Cos(angleRad);
-            var topLen = halfThickness / cos;
-            var topLenAa = halfThicknessAa / cos;
+            var topLen = CalculateHollowTipOffset(in endingSettings, halfThickness);
+            var topLenAa = CalculateHollowTipOffset(in endingSettings, halfThicknessAa);
             
             var topVert = CreateLineVert(point, -Vector2.Perpendicular(direction), topLen, topLenAa);
 
@@ -571,19 +920,17 @@ namespace UnityTools.GraphicPrimitives
         {
             for (int i = 1; i < lineVertices.Length; i++)
             {
-                (LineVert vert, LineVert prevVert) = lineVertices.GetCircularConsecutivePair(i);
+                ConnectLineVerts(in vh, in hullSettings, in lineVertices[i - 1], in lineVertices[i]);
+            }
+        }
 
-                vh.AddTriangle(vert.LeftIndex, vert.RightIndex, prevVert.LeftIndex);
-                vh.AddTriangle(vert.RightIndex, prevVert.RightIndex, prevVert.LeftIndex);
-
-                if (hullSettings.IsAaEnabled)
-                {
-                    vh.AddTriangle(vert.LeftIndex, vert.LeftIndexAa, prevVert.LeftIndex);
-                    vh.AddTriangle(prevVert.LeftIndex, prevVert.LeftIndexAa, vert.LeftIndexAa);
-
-                    vh.AddTriangle(vert.RightIndex, vert.RightIndexAa, prevVert.RightIndex);
-                    vh.AddTriangle(prevVert.RightIndex, prevVert.RightIndexAa, vert.RightIndexAa);
-                }
+        private static void ConnectLineVerts(in VertexHelper vh, in HullSettings hull, in LineVert previous, in LineVert current)
+        {
+            GraphicMesh.AddStrip(vh, previous.LeftIndex, previous.RightIndex, current.LeftIndex, current.RightIndex);
+            if (hull.IsAaEnabled)
+            {
+                GraphicMesh.AddStrip(vh, previous.LeftIndexAa, previous.LeftIndex, current.LeftIndexAa, current.LeftIndex);
+                GraphicMesh.AddStrip(vh, previous.RightIndex, previous.RightIndexAa, current.RightIndex, current.RightIndexAa);
             }
         }
 
@@ -750,203 +1097,23 @@ namespace UnityTools.GraphicPrimitives
             }
         }
 
-        private Vector2 GetDirection(in Vector2 point0, in Vector2 point1, in Vector2 point2)
-        {
-            if (point0 == point1)
-            {
-                var diff = point1 - point2;
-                return diff.normalized;
-            }
-            else
-            {
-                var diff = point0 - point1;
-                return diff.normalized;
-            }
-        }
-
-        private void FillInVerts(
-            in Settings settings,
-            in HullSettings hullSettings,
-            in VertexHelper vh,
-            in UvRect uvRect,
-            ref SpanBuffer<LineVert> verts)
-        {
-            var startEndingHeight = CalculateEndingOffset(in settings.StartEnding, settings.Thickness);
-            var endEndingHeight = CalculateEndingOffset(in settings.EndEnding, settings.Thickness);
-            var endingsOffsets = new EndingsOffsets(startEndingHeight, endEndingHeight);
-
-            if (settings.KnotsConfig.UseSpline)
-            {
-                FillInBezierLineVerts(settings, hullSettings, vh, uvRect, endingsOffsets, ref verts);
-            }
-            else
-            {
-                FillInLerpLineVerts(settings, hullSettings, vh, uvRect, endingsOffsets, ref verts);
-            }
-        }
-        
-        private void FillInBezierLineVerts(
-            in Settings settings,
-            in HullSettings hullSettings,
-            in VertexHelper vh,
-            in UvRect uvRect,
-            in EndingsOffsets endingOffsets,
-            ref SpanBuffer<LineVert> verts)
-        {
-            var knotsConfig = settings.KnotsConfig;
-            ref var startPoint = ref knotsConfig.Knots[0];
-            ref var endPoint = ref knotsConfig.Knots[1];
-            
-            const int precision = 1000;
-            using var selfOwnedBuffer = SpanBufferSharedPool.RentBuffer(precision + 1, out SpanBuffer<float> bezierLutBuffer);
-            
-            FillInBezierLut(in startPoint, in endPoint, precision, ref bezierLutBuffer);
-            var lut = bezierLutBuffer.FilledBufferSlice();
-
-            var totalLength = lut[^1];
-            var length = totalLength - endingOffsets.TotalOffset;
-
-            var segmentsNumber = settings.SegmentsNumber;
-            var segmentLength = length / segmentsNumber;
-
-            for (int i = 0; i < settings.PointsNumber; i++)
-            {
-                var distance = endingOffsets.StartEndingOffset + (segmentLength * i);
-                var t = GetTFromDistance(distance, in lut);
-                
-                var vertPosition = CubicBezier(startPoint.Position, startPoint.NextTangentPoint.SureValue, endPoint.Position, endPoint.PrevTangentPoint.SureValue, t);
-                var direction = CalculateCubicBezierTangent(startPoint.Position, startPoint.NextTangentPoint.SureValue, endPoint.Position, endPoint.PrevTangentPoint.SureValue, t);
-
-                var correctedPosition = vertPosition;
-                if (i == 0 || i == settings.PointsNumber - 1)
-                {
-                    if (i == 0)
-                    {
-                        correctedPosition = startPoint.Position + (vertPosition - startPoint.Position).normalized * endingOffsets.StartEndingOffset;
-                    }
-                    else
-                    {
-                        correctedPosition = endPoint.Position + (vertPosition - endPoint.Position).normalized * endingOffsets.EndEndingOffset;
-                    }
-                }
-               
-                var vert = CreateLineVert(correctedPosition, direction, settings.HalfThickness, settings.HalfThicknessAa);
-                AddLineVert(in vh, ref vert, ref verts, in hullSettings, in uvRect, color);
-            }
-        }
-
-        private float GetTFromDistance(float distance, in Span<float> lut)
-        {
-            if (distance <= 0)
-            {
-                return 0.0f;
-            }
-            
-            for (int i = 1; i < lut.Length; i++)
-            {
-                if (lut[i - 1] <= distance && distance <= lut[i])
-                {
-                    var tForT = distance - lut[i - 1] / lut[i] - lut[i - 1];
-                    return Mathf.Lerp((1.0f / lut.Length) * (i - 1), (1.0f / lut.Length) * i, tForT);
-                }
-            }
-
-            return 1.0f;
-        }
-
-        private void FillInBezierLut(in LineKnot startKnot, in LineKnot endKnot, int precision, ref SpanBuffer<float> bezierLutBuffer)
-        {
-            float step = 1.0f / precision;
-            bezierLutBuffer.Add(0.0f);
-
-            var startTangent = startKnot.NextTangentPoint.SureValue;
-            var endTangent = endKnot.PrevTangentPoint.SureValue;
-            
-            Vector2 prevPoint = startKnot.Position;
-            float cumulativeLength = 0.0f;
-            for (int i = 1; i <= precision; i++)
-            {
-                var t = step * i;
-                var newPoint = CubicBezier(startKnot.Position, startTangent, endKnot.Position, endTangent, t);
-                var segmentLength = (newPoint - prevPoint).magnitude;
-                cumulativeLength += segmentLength;
-                bezierLutBuffer.Add(cumulativeLength);
-                
-                prevPoint = newPoint;
-            }
-        }
-
-        private void FillInLerpLineVerts(
-            in Settings settings,
-            in HullSettings hullSettings,
-            in VertexHelper vh,
-            in UvRect uvRect,
-            in EndingsOffsets endingOffsets,
-            ref SpanBuffer<LineVert> verts)
-        {
-            var knotsConfig = settings.KnotsConfig;
-            var knots = knotsConfig.Knots;
-            
-            for (int knotIndex = 1; knotIndex < knots.Length; knotIndex++)
-            {
-                var startPoint = knots[knotIndex - 1].Position;
-                var endPoint = knots[knotIndex].Position;
-            
-                var diff = endPoint - startPoint;
-                var direction = diff.normalized;
-                var length = diff.magnitude - endingOffsets.TotalOffset;
-
-                var segmentsNumber = settings.SegmentsNumber;
-                var segmentLength = length / segmentsNumber;
-
-                for (int i = 0; i < settings.PointsNumber; i++)
-                {
-                    var vertPosition = startPoint + (direction * (endingOffsets.StartEndingOffset + (segmentLength * i)));
-                    var vert = CreateLineVert(vertPosition, direction, settings.HalfThickness, settings.HalfThicknessAa);
-
-                    AddLineVert(in vh, ref vert, ref verts, in hullSettings, in uvRect, color);
-                }
-            }
-        }
-
         private static LineVert CreateLineVert(Vector2 vertPosition, Vector2 direction, float halfThickness, float halfThicknessAa)
         {
-            var leftPerpendicular = Vector2.Perpendicular(direction);
+            return CreateLineVertFromNormal(vertPosition, Vector2.Perpendicular(direction), halfThickness, halfThicknessAa);
+        }
+
+        private static LineVert CreateLineVertFromNormal(Vector2 vertPosition, Vector2 normal, float halfThickness, float halfThicknessAa)
+        {
             return new LineVert
             {
                 Position = vertPosition,
-                LeftPosition = vertPosition + (leftPerpendicular * halfThickness),
-                LeftPositionAa = vertPosition + (leftPerpendicular * halfThicknessAa),
-                RightPosition = vertPosition - (leftPerpendicular * halfThickness),
-                RightPositionAa = vertPosition - (leftPerpendicular * halfThicknessAa),
+                LeftPosition = vertPosition + (normal * halfThickness),
+                LeftPositionAa = vertPosition + (normal * halfThicknessAa),
+                RightPosition = vertPosition - (normal * halfThickness),
+                RightPositionAa = vertPosition - (normal * halfThicknessAa),
             };
         }
 
-        private Vector2 CubicBezier(Vector2 pointX, Vector2 tangentX, Vector2 pointY, Vector2 tangentY, float t)
-        {
-            var xtx = Vector2.Lerp(pointX, tangentX, t);
-            var txty = Vector2.Lerp(tangentX, tangentY, t);
-            var tyy = Vector2.Lerp(tangentY, pointY, t);
-            
-            var a = Vector2.Lerp(xtx, txty, t);
-            var b = Vector2.Lerp(txty, tyy, t);
-            
-            var c = Vector2.Lerp(a, b, t);
-            
-            return c;
-        }
-        
-        private Vector2 CalculateCubicBezierTangent(Vector2 pointX, Vector2 tangentX, Vector2 pointY, Vector2 tangentY, float t)
-        {
-            float oneMinusT = 1 - t;
-
-            var result = 3f * oneMinusT * oneMinusT * (tangentX - pointX)
-                       + 6f * t * oneMinusT * (tangentY - tangentX)
-                       + 3f * t * t * (pointY - tangentY);
-
-            return result.normalized;
-        }
-        
         private Vector2 QuadraticBezier(Vector2 pointX, Vector2 controlPoint, Vector2 pointY, float t)
         {
             var xc = Vector2.Lerp(pointX, controlPoint, t);
@@ -956,108 +1123,51 @@ namespace UnityTools.GraphicPrimitives
             return result;
         }
         
-        private Vector2 CalculateQuadraticBezierTangent(Vector2 pointX, Vector2 controlPoint, Vector2 pointY, float t)
-        {
-            float oneMinusT = 1 - t;
-
-            var result = 2f * oneMinusT * (controlPoint - pointX)
-                              + 2f * t * (pointY - controlPoint);
-
-            return result.normalized;
-        }
-
-        /*private UvRect RecalculateSpriteUvsIfNeeded(Sprite sourceSprite, ref Sprite uvRectCalculatedForSprite, ref UvRect lastUvRect)
-        {
-            if (!lastUvRect.IsEmpty && sourceSprite == uvRectCalculatedForSprite)
-            {
-                return lastUvRect;
-            }
-            
-            if (sourceSprite == null || sourceSprite.packed == false)
-            {
-                uvRectCalculatedForSprite = sourceSprite;
-                lastUvRect = default;
-                
-                return lastUvRect;
-            }
-
-            if (sprite.packingMode == SpritePackingMode.Tight || sprite.uv.Length > 4)
-            {
-                var bottomLeft = new Vector2(float.MaxValue, float.MaxValue);
-                var topRight = new Vector2(float.MinValue, float.MinValue);
-
-                foreach (var uv in sprite.uv)
-                {
-                    bottomLeft.x = Mathf.Min(bottomLeft.x, uv.x);
-                    bottomLeft.y = Mathf.Min(bottomLeft.y, uv.y);
-                    
-                    topRight.x = Mathf.Max(topRight.x, uv.x);
-                    topRight.y = Mathf.Max(topRight.y, uv.y);
-                }
-                
-                Debug.LogWarning($"Packed sprites with {nameof(SpritePackingMode.Tight)} packing mode may appear wrongly. Consider using unpacked sprite or {nameof(SpritePackingMode.Rectangle)} packing.");
-
-                uvRectCalculatedForSprite = sourceSprite;
-                lastUvRect = new UvRect(bottomLeft, topRight);
-                
-                return lastUvRect;
-            }
-            else
-            {
-                var uvs = sprite.uv;
-                var topRight = uvs[1];
-                var bottomLeft = uvs[2];
-            
-                uvRectCalculatedForSprite = sourceSprite;
-                lastUvRect = new UvRect(bottomLeft, topRight);
-                
-                return lastUvRect;
-            }
-        }*/
-        
         private static void AddLineVert(in VertexHelper vh, ref LineVert vertex, ref SpanBuffer<LineVert> verts, in HullSettings hullSettings, in UvRect uvRect, in Color vertColor)
         {
-            /*var colorData = new ColorCalculationData(hullSettings.EnclosingRect, color, _gradientColor, _gradientType, _shouldUseGradient);
-            var vertColor = CalculateColor(in vertex.Position, in colorData);*/
+            WriteLineVert(in vh, ref vertex, in hullSettings, in uvRect, in vertColor);
+            verts.Add(vertex);
+        }
+
+        private static void WriteLineVert(in VertexHelper vh, ref LineVert vertex, in HullSettings hullSettings, in UvRect uvRect, in Color vertColor)
+        {
             var vertUv = CalculateUv(in vertex.Position, in hullSettings.EnclosingRect, in uvRect);
             
-            vertex.Index = (short)vh.currentVertCount;
+            vertex.Index = vh.currentVertCount;
             vh.AddVert(vertex.Position, vertColor, vertUv);
             
-            vertex.LeftIndex = (short)vh.currentVertCount;
+            vertex.LeftIndex = vh.currentVertCount;
             vh.AddVert(vertex.LeftPosition, vertColor, vertUv);
             
-            vertex.RightIndex = (short)vh.currentVertCount;
+            vertex.RightIndex = vh.currentVertCount;
             vh.AddVert(vertex.RightPosition, vertColor, vertUv);
             
             if (hullSettings.IsAaEnabled)
             {
-                vertex.LeftIndexAa = (short)vh.currentVertCount;
+                vertex.LeftIndexAa = vh.currentVertCount;
                 vh.AddVert(vertex.LeftPositionAa, vertColor.WithAlpha(0.0f), vertUv);
             
-                vertex.RightIndexAa = (short)vh.currentVertCount;
+                vertex.RightIndexAa = vh.currentVertCount;
                 vh.AddVert(vertex.RightPositionAa, vertColor.WithAlpha(0.0f), vertUv);
             }
-            
-            verts.Add(vertex);
         }
         
         private static void AddEndingVert(in VertexHelper vh, ref CornerVert vertex, ref SpanBuffer<CornerVert> verts, in HullSettings hullSettings, in UvRect uvRect, in Color vertColor)
         {
             var vertUv = CalculateUv(in vertex.Position, in hullSettings.EnclosingRect, in uvRect);
             
-            vertex.Index = (short)vh.currentVertCount;
+            vertex.Index = vh.currentVertCount;
             vh.AddVert(vertex.Position, vertColor, vertUv);
             
             if (hullSettings.IsAaEnabled)
             {
-                vertex.IndexAa0 = (short)vh.currentVertCount;
+                vertex.IndexAa0 = vh.currentVertCount;
                 vh.AddVert(vertex.PositionAa0, vertColor.WithAlpha(0.0f), vertUv);
                 
-                vertex.IndexAa1 = (short)vh.currentVertCount;
+                vertex.IndexAa1 = vh.currentVertCount;
                 vh.AddVert(vertex.PositionAa1, vertColor.WithAlpha(0.0f), vertUv);
                 
-                vertex.IndexAa2 = (short)vh.currentVertCount;
+                vertex.IndexAa2 = vh.currentVertCount;
                 vh.AddVert(vertex.PositionAa2, vertColor.WithAlpha(0.0f), vertUv);
             }
             
@@ -1068,12 +1178,12 @@ namespace UnityTools.GraphicPrimitives
         {
             var vertUv = CalculateUv(in vertex.Position, in hullSettings.EnclosingRect, in uvRect);
             
-            vertex.Index = (short)vh.currentVertCount;
+            vertex.Index = vh.currentVertCount;
             vh.AddVert(vertex.Position, vertColor, vertUv);
             
             if (hullSettings.IsAaEnabled)
             {
-                vertex.IndexAa = (short)vh.currentVertCount;
+                vertex.IndexAa = vh.currentVertCount;
                 vh.AddVert(vertex.PositionAa, vertColor.WithAlpha(0.0f), vertUv);
             }
             
@@ -1084,7 +1194,7 @@ namespace UnityTools.GraphicPrimitives
         {
             var vertUv = CalculateUv(in position, in hullSettings.EnclosingRect, in uvRect);
             
-            var index = (short)vh.currentVertCount;
+            var index = vh.currentVertCount;
             vh.AddVert(position, vertColor, vertUv);
 
             return index;

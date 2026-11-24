@@ -2,7 +2,8 @@
     "name": "GraphicPrimitives.Editor",
     "rootNamespace": "GraphicPrimitives.Editor",
     "references": [
-        "GUID:81a1b122a92a49dfb6eb4bbf48ce7bcc"
+        "GUID:81a1b122a92a49dfb6eb4bbf48ce7bcc",
+        "GUID:28452d230e77a534c8d2642d60d7c6c2"
     ],
     "includePlatforms": [
         "Editor"

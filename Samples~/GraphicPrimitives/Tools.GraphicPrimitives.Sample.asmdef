@@ -1,0 +1,8 @@
+{
+    "name": "Tools.GraphicPrimitives.Sample",
+    "rootNamespace": "FatLarva.Tools.Samples",
+    "references": [
+        "GraphicPrimitives",
+        "UnityEngine.UI"
+    ]
+}

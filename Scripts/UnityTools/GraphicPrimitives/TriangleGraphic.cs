@@ -7,7 +7,7 @@ namespace UnityTools.GraphicPrimitives
 {
     [RequireComponent(typeof(CanvasRenderer))]
     [AddComponentMenu("UI/Triangle Graphic", 12)]
-    public class TriangleGraphic : MaskableGraphic
+    public class TriangleGraphic : PrimitiveGraphic
     {
         private struct Vert
         {
@@ -99,7 +99,7 @@ namespace UnityTools.GraphicPrimitives
         private GradientType _gradientType;
         
         [SerializeField]
-        private Gradient _gradientColor = new ();
+        private Gradient _gradientColor = ClosedContour.WhiteGradient();
         
         [SerializeField, Min(0)]
         private float _edgeThickness = 1;
@@ -111,7 +111,7 @@ namespace UnityTools.GraphicPrimitives
         private float _innerAntiAliasingLayerWidth = 0;
         
         [SerializeField]
-        private Color _edgeColor;
+        private Color _edgeColor = Color.white;
         
         protected override void OnPopulateMesh(VertexHelper vh)
         {
