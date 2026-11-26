@@ -125,6 +125,10 @@ namespace UnityTools.GraphicPrimitives
 
         [SerializeField]
         private bool _isDashed;
+
+        [SerializeField]
+        [Tooltip("Centers a dash on each corner and fits a whole number of dash periods between corners.")]
+        private bool _alignDashesToCorners;
         
         [SerializeField, Range(0, 1000)]
         [Tooltip("Desired dash length in local UI units. The pattern fits evenly around the perimeter.")]
@@ -145,6 +149,19 @@ namespace UnityTools.GraphicPrimitives
         private int _trianglesCount;
 
         internal bool DashBudgetExceeded { get; private set; }
+
+        public bool AlignDashesToCorners
+        {
+            get => _alignDashesToCorners;
+            set
+            {
+                if (_alignDashesToCorners != value)
+                {
+                    _alignDashesToCorners = value;
+                    SetVerticesDirty();
+                }
+            }
+        }
 
         public float CornerRadius
         {
@@ -261,17 +278,22 @@ namespace UnityTools.GraphicPrimitives
             var spriteUv = GraphicMesh.GetSpriteUv(overrideSprite);
 
             Span<Vert> storage = stackalloc Vert[4 * (quality + 3) + 1];
-            var contour = BuildContour(storage, rect, radius, quality, edge, innerAa, outerAa, dashed);
+            Span<float> corners = stackalloc float[4];
+            Span<int> sidePeriods = stackalloc int[4];
+            var contour = BuildContour(storage, corners, rect, radius, quality, edge, innerAa, outerAa, dashed);
             if (!float.IsFinite(contour[^1].Distance) || contour[^1].Distance <= 0)
             {
                 return;
             }
 
             var periods = 0;
-            if (dashed && dash > 0 && !TryGetDashPeriods(contour, dash, gap, fill, outerAa > 0, out periods))
+            var dashLength = 0d;
+            if (dashed && dash > 0 &&
+                !TryFitDashes(contour, corners, sidePeriods, dash, gap, fill, outerAa > 0, out periods, out dashLength))
             {
-                contour = BuildContour(storage, rect, radius, 3, edge, innerAa, outerAa, true);
-                DashBudgetExceeded = !TryGetDashPeriods(contour, dash, gap, fill, outerAa > 0, out periods);
+                contour = BuildContour(storage, corners, rect, radius, 3, edge, innerAa, outerAa, true);
+                DashBudgetExceeded = !TryFitDashes(contour, corners, sidePeriods, dash, gap, fill, outerAa > 0,
+                    out periods, out dashLength);
             }
 
             if (outline && !dashed)
@@ -282,7 +304,15 @@ namespace UnityTools.GraphicPrimitives
             else if (periods > 0)
             {
                 var style = new BorderStyle(rect, spriteUv, AddFillCenter(vh, rect, spriteUv, fill), innerAa > 0, outerAa > 0);
-                DrawDashedBorder(vh, contour, style, dash, gap, periods, outerAa);
+                var fade = Mathf.Min(outerAa, (float)(dashLength * 0.5d));
+                if (_alignDashesToCorners)
+                {
+                    DrawCornerDashes(vh, contour, style, corners, sidePeriods, dashLength, fade);
+                }
+                else
+                {
+                    DrawDashedBorder(vh, contour, style, periods, dashLength, fade);
+                }
             }
             else if (fill)
             {
@@ -293,18 +323,26 @@ namespace UnityTools.GraphicPrimitives
             _trianglesCount = vh.currentIndexCount / 3;
         }
 
-        private static Span<Vert> BuildContour(Span<Vert> storage, Rect rect, CornersRoundings radii,
-            int quality, float edge, float innerAa, float outerAa, bool alignDashCuts)
+        private static Span<Vert> BuildContour(
+            Span<Vert> storage,
+            Span<float> corners,
+            Rect rect,
+            CornersRoundings radii,
+            int quality,
+            float edge,
+            float innerAa,
+            float outerAa,
+            bool alignDashCuts)
         {
             var minSide = Mathf.Min(rect.width, rect.height);
             var count = 0;
-            AddCorner(storage, ref count, new Vector2(rect.xMin, rect.yMin), Vector2.left, Vector2.down,
+            corners[0] = AddCorner(storage, ref count, new Vector2(rect.xMin, rect.yMin), Vector2.left, Vector2.down,
                 Mathf.Min(NonnegativeFinite(radii.BottomLeft), 0.5f) * minSide, quality, edge, innerAa, outerAa, alignDashCuts);
-            AddCorner(storage, ref count, new Vector2(rect.xMax, rect.yMin), Vector2.down, Vector2.right,
+            corners[1] = AddCorner(storage, ref count, new Vector2(rect.xMax, rect.yMin), Vector2.down, Vector2.right,
                 Mathf.Min(NonnegativeFinite(radii.BottomRight), 0.5f) * minSide, quality, edge, innerAa, outerAa, alignDashCuts);
-            AddCorner(storage, ref count, new Vector2(rect.xMax, rect.yMax), Vector2.right, Vector2.up,
+            corners[2] = AddCorner(storage, ref count, new Vector2(rect.xMax, rect.yMax), Vector2.right, Vector2.up,
                 Mathf.Min(NonnegativeFinite(radii.TopRight), 0.5f) * minSide, quality, edge, innerAa, outerAa, alignDashCuts);
-            AddCorner(storage, ref count, new Vector2(rect.xMin, rect.yMax), Vector2.up, Vector2.left,
+            corners[3] = AddCorner(storage, ref count, new Vector2(rect.xMin, rect.yMax), Vector2.up, Vector2.left,
                 Mathf.Min(NonnegativeFinite(radii.TopLeft), 0.5f) * minSide, quality, edge, innerAa, outerAa, alignDashCuts);
 
             var first = storage[0];
@@ -319,13 +357,24 @@ namespace UnityTools.GraphicPrimitives
             return storage[..(count + 1)];
         }
 
-        private static void AddCorner(Span<Vert> storage, ref int count, Vector2 corner, Vector2 firstNormal,
-            Vector2 lastNormal, float radius, int quality, float edge, float innerAa, float outerAa, bool alignDashCuts)
+        private static float AddCorner(
+            Span<Vert> storage,
+            ref int count,
+            Vector2 corner,
+            Vector2 firstNormal,
+            Vector2 lastNormal,
+            float radius,
+            int quality,
+            float edge,
+            float innerAa,
+            float outerAa,
+            bool alignDashCuts)
         {
             var cornerDirection = firstNormal + lastNormal;
             var center = corner - cornerDirection * radius;
             var sampleCount = radius > 0 ? quality + 1 : 1;
             var arcStep = radius * Mathf.PI * 0.5f / quality;
+            var arcStart = 0f;
             for (int i = 0; i < sampleCount; i++)
             {
                 var normal = firstNormal;
@@ -347,6 +396,10 @@ namespace UnityTools.GraphicPrimitives
                     var step = i == 0 ? Vector2.Distance(previous.Position, position) : arcStep;
                     distance = previous.Distance + step;
                 }
+                if (i == 0)
+                {
+                    arcStart = distance;
+                }
 
                 var row = new Vert
                 {
@@ -363,6 +416,8 @@ namespace UnityTools.GraphicPrimitives
 
                 storage[count++] = row;
             }
+
+            return arcStart + (storage[count - 1].Distance - arcStart) * 0.5f;
         }
 
         private static void AddSideRows(Span<Vert> storage, ref int count, Vert first, Vert last)
@@ -422,51 +477,150 @@ namespace UnityTools.GraphicPrimitives
             return center + normal * (radius - inset);
         }
 
-        private static bool TryGetDashPeriods(ReadOnlySpan<Vert> contour, float dash, float gap,
-            bool fill, bool fade, out int periods)
+        private bool TryFitDashes(
+            ReadOnlySpan<Vert> contour,
+            ReadOnlySpan<float> corners,
+            Span<int> sidePeriods,
+            float dash,
+            float gap,
+            bool fill,
+            bool fade,
+            out int periods,
+            out double dashLength)
         {
-            var count = Math.Max(1d, Math.Round(contour[^1].Distance / ((double)dash + gap)));
             // Each dash contributes two endpoints and up to two fade rows. Gaps contribute two endpoints.
-            // The final interval includes any part of the pattern that wraps across the start of the contour.
-            var rows = contour.Length + (count + 1) * (2 + (fade ? 2 : 0) + (fill ? 2 : 0));
-            var vertices = rows * (fade ? 4 : 3) + (fill ? 1 : 0);
-            if (vertices > GraphicMesh.MaximumVertices)
+            // Reserve one extra interval for the cut at the contour seam.
+            var rowsPerPeriod = 2 + (fade ? 2 : 0) + (fill ? 2 : 0);
+            var availableRows = (GraphicMesh.MaximumVertices - (fill ? 1 : 0)) / (fade ? 4 : 3) - contour.Length;
+            var maxPeriods = availableRows / rowsPerPeriod - 1;
+            var perimeter = (double)contour[^1].Distance;
+            var preferredPeriod = (double)dash + gap;
+            periods = 0;
+            dashLength = 0d;
+
+            if (!_alignDashesToCorners)
             {
-                periods = 0;
-                return false;
+                var count = Math.Max(1d, Math.Round(perimeter / preferredPeriod));
+                if (count > maxPeriods)
+                {
+                    return false;
+                }
+                periods = (int)count;
+                dashLength = perimeter / count * (dash / preferredPeriod);
+                return true;
             }
 
-            periods = (int)count;
+            var shortestPeriod = double.PositiveInfinity;
+            for (int side = 0; side < corners.Length; side++)
+            {
+                var next = side + 1 < corners.Length ? corners[side + 1] : corners[0] + perimeter;
+                var length = next - corners[side];
+                sidePeriods[side] = 0;
+                if (length <= 0d)
+                {
+                    continue;
+                }
+
+                var count = Math.Max(1d, Math.Round(length / preferredPeriod));
+                if (count > maxPeriods - periods)
+                {
+                    periods = 0;
+                    return false;
+                }
+
+                sidePeriods[side] = (int)count;
+                periods += (int)count;
+                shortestPeriod = Math.Min(shortestPeriod, length / count);
+            }
+
+            // A shared length gives each corner equal halves, with each side absorbing the fit in its gaps.
+            dashLength = shortestPeriod * (dash / preferredPeriod);
             return true;
         }
 
-        private void DrawDashedBorder(VertexHelper vh, ReadOnlySpan<Vert> contour, BorderStyle style,
-            float dash, float gap, int periods, float outerAa)
+        private void DrawDashedBorder(
+            VertexHelper vh,
+            ReadOnlySpan<Vert> contour,
+            BorderStyle style,
+            int periods,
+            double dashLength,
+            float fade)
         {
             var perimeter = contour[^1].Distance;
             var period = (double)perimeter / periods;
-            var dashLength = period * (dash / ((double)dash + gap));
             var phase = Mathf.Repeat(NonnegativeFinite(_dashShift), 1f) * period;
-            var fade = Mathf.Min(outerAa, (float)(dashLength * 0.5d));
             for (int i = 0; i <= periods; i++)
             {
                 var start = i * period - phase;
-                var end = start + dashLength;
-                var from = (float)Math.Max(0, start);
-                var to = (float)Math.Min(perimeter, end);
-                if (to > from)
+                DrawDashCycle(vh, contour, style, start, start + dashLength, start + period, fade);
+            }
+        }
+
+        private void DrawCornerDashes(
+            VertexHelper vh,
+            ReadOnlySpan<Vert> contour,
+            BorderStyle style,
+            ReadOnlySpan<float> corners,
+            ReadOnlySpan<int> sidePeriods,
+            double dashLength,
+            float fade)
+        {
+            var perimeter = (double)contour[^1].Distance;
+            var halfDash = dashLength * 0.5d;
+            for (int side = 0; side < corners.Length; side++)
+            {
+                var count = sidePeriods[side];
+                if (count == 0)
                 {
-                    DrawBorderSpan(vh, contour, style, from, to, true, (float)start, (float)end, fade);
+                    continue;
                 }
 
-                if (style.FillIndex >= 0)
+                var next = side + 1 < corners.Length ? corners[side + 1] : corners[0] + perimeter;
+                var period = (next - corners[side]) / count;
+                for (int i = 0; i < count; i++)
                 {
-                    var gapFrom = (float)Math.Max(0, end);
-                    var gapTo = (float)Math.Min(perimeter, start + period);
-                    if (gapTo > gapFrom)
+                    var start = corners[side] + i * period - halfDash;
+                    var end = start + dashLength;
+                    var nextStart = i + 1 == count ? next - halfDash : start + period;
+                    DrawDashCycle(vh, contour, style, start, end, nextStart, fade);
+
+                    // Clip both copies against the contour, preserving the fade endpoints across the seam.
+                    if (start < 0d)
                     {
-                        DrawBorderSpan(vh, contour, style, gapFrom, gapTo, false);
+                        DrawDashCycle(vh, contour, style, start + perimeter, end + perimeter, nextStart + perimeter, fade);
                     }
+                    else if (nextStart > perimeter)
+                    {
+                        DrawDashCycle(vh, contour, style, start - perimeter, end - perimeter, nextStart - perimeter, fade);
+                    }
+                }
+            }
+        }
+
+        private void DrawDashCycle(
+            VertexHelper vh,
+            ReadOnlySpan<Vert> contour,
+            BorderStyle style,
+            double start,
+            double end,
+            double nextStart,
+            float fade)
+        {
+            var perimeter = contour[^1].Distance;
+            var from = (float)Math.Max(0, start);
+            var to = (float)Math.Min(perimeter, end);
+            if (to > from)
+            {
+                DrawBorderSpan(vh, contour, style, from, to, true, (float)start, (float)end, fade);
+            }
+
+            if (style.FillIndex >= 0)
+            {
+                var gapFrom = (float)Math.Max(0, end);
+                var gapTo = (float)Math.Min(perimeter, nextStart);
+                if (gapTo > gapFrom)
+                {
+                    DrawBorderSpan(vh, contour, style, gapFrom, gapTo, false);
                 }
             }
         }

@@ -60,3 +60,5 @@ Import samples from **Tools > Samples** in the Package Manager.
 Version 1.2.0 also fixes a race in `AtomicBool.TryFlip`. It now reports success only when its compare-and-exchange changes the flag. `FlipBool.TrySet` provides conditional assignment for single-threaded code.
 
 Import [**Graphic Primitives**](Samples~/GraphicPrimitives/README.md) from Package Manager to explore the shape examples in an interactive uGUI scene.
+
+On `RoundedRectGraphic`, enable **Dashed** and **Align Dashes To Corners** to place a dash across each corner. **Dash Length** and **Gap Length** set the target lengths, and the graphic places the pattern automatically.

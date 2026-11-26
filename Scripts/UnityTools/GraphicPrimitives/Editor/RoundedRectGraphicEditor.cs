@@ -1,4 +1,5 @@
 using UnityEditor;
+using UnityEngine;
 using UnityTools.GraphicPrimitives;
 
 namespace Tools.EditorOnly.GraphicPrimitives
@@ -8,6 +9,11 @@ namespace Tools.EditorOnly.GraphicPrimitives
     [CustomEditor(typeof(RoundedRectGraphic)), CanEditMultipleObjects]
     public class RoundedRectGraphicEditor : Editor
     {
+        private static readonly GUIContent DashLengthLabel = new("Dash Length", "Desired dash length in local UI units.");
+        private static readonly GUIContent GapLengthLabel = new("Gap Length", "Desired gap between dashes in local UI units.");
+        private static readonly GUIContent PhaseLabel = new("Phase",
+            "Offset as a fraction of one dash and gap cycle. Corner alignment sets this automatically.");
+
         private bool _showDiagnostics;
 
         public override void OnInspectorGUI()
@@ -28,7 +34,7 @@ namespace Tools.EditorOnly.GraphicPrimitives
             {
                 // RoundedRect stores the ratio of the whole shorter side.
                 PrimitiveInspector.DrawStroke(serialized, thicknessMode: "_edgeThicknessType", relativeThicknessScale: 2f);
-                PrimitiveInspector.DrawPerimeterDashes(serialized, "_dashLengthPixels", "_dashGapLengthPixels", "_dashShift");
+                DrawDashes(serialized);
             }
 
             PrimitiveInspector.DrawAntiAliasing(serialized, "_antiAliasingBorderThickness", drawStroke ? "_innerAaThickness" : null);
@@ -54,6 +60,28 @@ namespace Tools.EditorOnly.GraphicPrimitives
             }
 
             PrimitiveInspector.Count(serialized.FindProperty("_cornerQuality"), "Corner Segments", 3, 36);
+        }
+
+        private static void DrawDashes(SerializedObject serialized)
+        {
+            var dashed = serialized.FindProperty("_isDashed");
+            if (!PrimitiveInspector.DrawDashToggle(dashed))
+            {
+                return;
+            }
+
+            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUI.DisabledScope(dashed.hasMultipleDifferentValues))
+            {
+                var alignToCorners = serialized.FindProperty("_alignDashesToCorners");
+                PrimitiveInspector.Field(alignToCorners, "Align Dashes To Corners");
+                PrimitiveInspector.Number(serialized.FindProperty("_dashLengthPixels"), DashLengthLabel);
+                PrimitiveInspector.Number(serialized.FindProperty("_dashGapLengthPixels"), GapLengthLabel);
+                using (new EditorGUI.DisabledScope(alignToCorners.hasMultipleDifferentValues || alignToCorners.boolValue))
+                {
+                    EditorGUILayout.Slider(serialized.FindProperty("_dashShift"), 0f, 1f, PhaseLabel);
+                }
+            }
         }
 
         private string GetMeshWarning()
